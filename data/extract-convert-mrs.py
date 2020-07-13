@@ -3,6 +3,7 @@ import os
 import re
 import argparse
 import json
+import difflib
 
 from delphin import itsdb as d_itsdb
 from delphin import dmrs as d_dmrs
@@ -14,17 +15,23 @@ from delphin import mrs as d_mrs
 
 
 class SemanticNode():
-    def __init__(self, node_id, predicate):
+    def __init__(self, node_id, predicate, carg):
         self.node_id = node_id
+        self.original_predicate = predicate
         self.predicate = predicate
+        self.carg = None if carg == "" else carg
 
+        self.internal_parent = -1
         self.internal_child = -1
         self.internal_edge_label = ""
+        self.has_ancestor = False
         self.is_semantic_terminal = False # no children, used for semantic roles
-        self.is_semantic_receiver = False # has a parent up in the tree
+        self.is_semantic_head = False # has direct semantic children in tree
+        self.is_surface = False
 
     def __str__(self):
-        return "%s" % (self.predicate)
+        return "%s" % (self.original_predicate)
+        #return "%s %s %s" % (self.original_predicate, self.carg, self.predicate)
 
 
 class Node():
@@ -33,6 +40,9 @@ class Node():
         self.syntax_labels = [syntax_label]
         self.phrase_labels = []
         self.semantic_nodes = []
+
+        self.semantic_parent_node = -1
+        self.semantic_parent_edge_label = ""
         
         self.child_node_ids = []
         self.overlapping_node_ids = []
@@ -63,7 +73,7 @@ class Token():
         #self.unmatchedToken = False
         self.lemma = ""
         self.carg = ""
-        self.isGrammarUnknown = False
+        self.is_unknown = False
 
     def __str__(self):
         return "%d %s" % (self.index, self.token_str)
@@ -104,19 +114,16 @@ def get_dmrs(mrs_str):
         try: 
             dmrs_rep = d_dmrs.from_mrs(mrs_rep[0])
             return dmrs_rep
-        except KeyError:
-            #print("DMRS conversion error", result['mrs'])
+        except KeyError: # "DMRS conversion error"
             return None
 
     except d_mrs._exceptions.MRSSyntaxError:
-        #print("Skipping: MRS syntax error", result['mrs'])
         return None
 
 
 def parse_token_tfs(node_token):
     tfs = node_token.tfs
     start_char, end_char, form = -1, -1, ""
-    #print(tfs)
 
     if "+FROM #1=\\" in tfs:
         start_i = tfs.index("+FROM #1=\\") + len("+FROM #1=\\") + 1
@@ -130,8 +137,9 @@ def parse_token_tfs(node_token):
         end_char = int(tfs[end_i:tfs.index("\\", end_i)])
 
     if "+FORM \\" in tfs:
-        form_i = tfs.index("+FORM \\") + len("+FORM \\") + 1
+        form_i = tfs.index("+FORM \\") + len("+FORM \\") + 1 #TODO bug in finding end
         form = tfs[form_i:tfs.index("\\", start_i)]
+        print(form)
 
     return start_char, end_char, form
 
@@ -181,13 +189,13 @@ def parse_node_token(node_token, token_dict):
         new_token.start_char, new_token.end_char, new_token.token_str = parse_token_tfs(node_token)
         assert new_token.start_char >= 0 and new_token.end_char >= 0, "Can't parse token " + str(tfs)
 
-        new_token.index, end_index = match_token_vertex(new_token, token_dict)
-        if new_token.index != end_index:
-            print("Unmatched multitoken")
-            print(node_token)
-            print(new_token)
+        new_token.index, _ = match_token_vertex(new_token, token_dict)
         assert new_token.index >= 0, "No matching token for derivation token " + str(tfs)
         return [new_token]
+
+
+def covers_span(parent_node, child_node):
+    return parent_node.start_token_index <= child_node.start_token_index and parent_node.end_token_index >= child_node.end_token_index
 
 
 def create_span_node_map(nodes):
@@ -208,6 +216,27 @@ def create_token_node_list(token_nodes):
         token_list[token_node.index] = token_id
 
     return token_list
+
+
+def text_to_digits(t):
+    digit_map = {"zero":0, "one":1, "two":2, "three":3, "four":4, "five":5, "six":6, "seven":7, "eight":8, "nine":9, "ten":10, "eleven":11, "twelve":12, "thirteen":13, "fourteen":14, "fifteen":15, "sixteen":16, "seventeen":17, "eighteen":18, "nineteen":19, "twenty":20, "thirty":30, "forty":40, "fifty":50, "sixty":60, "seventy":70, "eighty":80, "ninety":90, "hundred":100, "thousand":1000, "million":1000000, "billion":1000000000, "trillion":1000000000000, "second":2, "third":3, "fifth":5, "eighth":8, "ninth":9, "half":"1/2"}
+    if t in digit_map:
+        return str(digit_map[t])
+    elif t + "th" in digit_map:
+        return str(digit_map[t+"th"])
+    else:
+        return t
+
+
+def clean_token_lemma(tok_str, pred_is_digit=False):
+    t_str = tok_str.lower().strip("-.,\"\';")
+    # Manual lemmatization rules
+    surface_map = {"best":"good", "better":"good", "/":"and", "is":"be", "was":"be", "km":"kilometer", "worst":"bad", "worse":"bad", "&":"and", "’s":"be", "'s":"be", "isn’t":"be", "wasn’t":"be", "%":"percent", "$":"dollar", "went":"go", ":":"colon", "are":"be", "were":"be"}
+    if t_str in surface_map:
+        t_str = surface_map[t_str]
+    if pred_is_digit:
+        t_str = text_to_digits(t_str)
+    return t_str
 
 
 def create_char_token_maps(token_nodes):
@@ -256,6 +285,7 @@ class MeaningRepresentation():
         self.token_node_list = create_token_node_list(self.token_nodes)
         self.start_char_token_map, self.end_char_token_map = create_char_token_maps(self.token_nodes)
         self.token_preterminal_node_map = create_preterminal_node_map(self.nodes)
+        self.overlapping_node_map = dict()
 
         self.dmrs_node_map = dict()
         self.token_sequence = [] # Ordered tokens. Format (token_id, token_position_index, form, lemma or unknown)
@@ -266,7 +296,7 @@ class MeaningRepresentation():
         out_str = "\n" + " "*level if newline else ""
         if overlapping:
             out_str += "*" + str(node.start_token_index) + ":" + str(node.end_token_index) + " "
-        out_str += "(" + str([s_node.predicate for s_node in node.semantic_nodes]) + " "
+        out_str += "(" + str([str(s_node.node_id) + ":" + s_node.original_predicate for s_node in node.semantic_nodes]) + " "
         for child_id in node.overlapping_node_ids:
             out_str += self.semantic_tree_str(child_id, level+4, True, True) + " "
         for child_id in node.child_node_ids:
@@ -310,7 +340,7 @@ class MeaningRepresentation():
 
 
     def map_dmrs_node(self, node):
-        assert node.lnk.data[0] in self.start_char_token_map and node.lnk.data[1] in self.end_char_token_map, "MRS predicate not matching tokens: " + str(node.predicate) + " " + str(node.lnk)
+        assert node.lnk.data[0] in self.start_char_token_map and node.lnk.data[1] in self.end_char_token_map, "MRS predicate not matching tokens: " + str(node.original_predicate) + " " + str(node.lnk)
         start_node, end_node = self.start_char_token_map[node.lnk.data[0]], self.end_char_token_map[node.lnk.data[1]]
         start_token, end_token = self.token_nodes[start_node].index, self.token_nodes[end_node].index
         span_str = "%d:%d" % (start_token, end_token)
@@ -319,27 +349,45 @@ class MeaningRepresentation():
         # match nodes (not token nodes)
         if span_str in self.span_node_map:
             node_id = self.span_node_map[span_str]
-            self.nodes[node_id].semantic_nodes.append(SemanticNode(node.id, node.predicate))
-            self.dmrs_node_map[node.id] = (False, node_id)
+            self.nodes[node_id].semantic_nodes.append(SemanticNode(node.id, node.predicate, node.carg))
+            self.dmrs_node_map[node.id] = node_id
             matched_node = True
         else:
-            if start_token == end_token:
-                print("DMRS Node matches to token, not node", node)
-            self.dmrs_node_map[node.id] = (False, -1, start_token, end_token)
+            self.dmrs_node_map[node.id] = (-1, start_token, end_token)
         
         return matched_node
 
 
+    def match_surface_predicate_token(self, predicate, start_token_index, end_token_index):
+        match_prob = []
+        tkns = []
+        lemma, pos, sense = d_predicate.split(predicate)
+        if pos == 'u':
+            lemma = lemma[:lemma.rindex('/')]
+        for tok_index in range(start_token_index, end_token_index+1):
+            # id lookup bypasses the derivation node
+            token = self.token_nodes[self.token_node_list[tok_index]] 
+            t_str = clean_token_lemma(token.token_str, predicate.isdigit())
+            tkns.append(t_str)
+            seq = difflib.SequenceMatcher(a=t_str, b=lemma.lower())
+            match_prob.append(seq.ratio())
+        token_match = start_token_index + match_prob.index(max(match_prob))
+        if max(match_prob) == 0:
+            print(predicate, tkns)
+
+        return token_match
+
+
     def match_overlapping_dmrs_node(self, node):
         # Find matching parent for unmatched node
-        start_token, end_token = self.dmrs_node_map[node.id][2], self.dmrs_node_map[node.id][3]
+        start_token, end_token = self.dmrs_node_map[node.id][1], self.dmrs_node_map[node.id][2]
         matched = False
 
         for node_id, s_node in self.nodes.items():
             if s_node.start_token_index == start_token and s_node.end_token_index == end_token:
                 assert s_node.syntax_labels[0] == "NULL" # overlapping node
-                self.nodes[node_id].semantic_nodes.append(SemanticNode(node.id, node.predicate))
-                self.dmrs_node_map[node.id] = (False, node_id)
+                self.nodes[node_id].semantic_nodes.append(SemanticNode(node.id, node.predicate, node.carg))
+                self.dmrs_node_map[node.id] = node_id
                 matched = True
                 break
 
@@ -352,41 +400,167 @@ class MeaningRepresentation():
                         new_node_id = new_node_id*10
 
                     new_node = Node(new_node_id, "NULL", start_token, end_token)
-                    new_node.semantic_nodes.append(SemanticNode(node.id, node.predicate))
+                    new_node.semantic_nodes.append(SemanticNode(node.id, node.predicate, node.carg))
                     self.nodes[node_id].overlapping_node_ids.append(new_node_id)
+                    self.overlapping_node_map[new_node_id] = node_id
                     self.nodes[new_node_id] = new_node
-                    self.dmrs_node_map[node.id] = (False, new_node_id)
+                    self.dmrs_node_map[node.id] = new_node_id
                     matched = True
                     break
 
         assert matched, "Not Matched %s %d %d" % (str(node), start_token, end_token) 
 
+    def process_semantic_tree(self, node_id, dmrs_rep, semantic_parent=-1):
+        node = self.nodes[node_id]
+        sem_node_ids = [snode.node_id for snode in node.semantic_nodes]
+        remove_sem_nodes = []
+        internal_edge_from = [] # semantic node ids
+        internal_edge_to = []
+        internal_edge_label = []
 
-    def link_dmrs_nodes(self, dmrs_rep):
-        for edge in dmrs_rep.links:
-            start_node_id = self.dmrs_node_map[edge.start][1]
-            end_node_id = self.dmrs_node_map[edge.end][1]
+        if node.semantic_nodes:
+            semantic_anchor = node_id
+            node.semantic_parent_node = semantic_parent
+            for edge in dmrs_rep.links:
+                start_node_id = self.dmrs_node_map[edge.start]
+                end_node_id = self.dmrs_node_map[edge.end]
+                if end_node_id == node_id:
+                    #start_id = sem_node_ids.index(edge.start)
+                    end_id = sem_node_ids.index(edge.end)
+                    sem_node = node.semantic_nodes[end_id]
+                    if start_node_id == node_id:
+                        # record internal edge
+                        internal_edge_from.append(edge.start) 
+                        internal_edge_to.append(edge.end) 
+                        internal_edge_label.append(edge.role) 
+                        # previously recorded in the node, and test for non-chains
+                    elif start_node_id == semantic_parent:
+                        # record ancestor edge
+                        self.nodes[node_id].semantic_nodes[end_id].has_ancestor = True
+                        #assert self.nodes[node_id].semantic_parent_edge_label == ""
+                        self.nodes[node_id].semantic_parent_edge_label = edge.role
+                        parent_sem_node_ids = [snode.node_id for snode in self.nodes[semantic_parent].semantic_nodes]
+                        parent_start_id = parent_sem_node_ids.index(edge.start)
+                        self.nodes[semantic_parent].semantic_nodes[parent_start_id].is_semantic_head = True
 
-            if start_node_id == end_node_id:
-                # record internal edges
-                node_id = start_node_id
-                assert node_id in self.nodes
-                node = self.nodes[node_id]
-                sem_node_ids = [snode.node_id for snode in node.semantic_nodes]
-                start_id, end_id = sem_node_ids.index(edge.start), sem_node_ids.index(edge.end)
-                self.nodes[node_id].semantic_nodes[start_id].internal_child = sem_node_ids[end_id]
-                self.nodes[node_id].semantic_nodes[start_id].internal_edge_label = edge.role
-            #TODO figure this out
-            #elif start_node_id in self.token_nodes:
-            #    if end_node_id not in self.token_nodes:
-            #        print(self.token_nodes[start_node_id].token_str, edge.role, [nd.predicate for nd in self.nodes[end_node_id].semantic_nodes])
-            #else:
-            #    if end_node_id in self.token_nodes:
-            #        token_index = self.token_nodes[end_node_id].index
-            #        if not (token_index >= self.nodes[start_node_id].start_token_index and token_index <= self.nodes[start_node_id].end_token_index):
-            #            print([nd.predicate for nd in self.nodes[start_node_id].semantic_nodes], edge.role, self.token_nodes[end_node_id].token_str)
-        #TODO order internal semantic nodes; find surface predicate
+            # identify non-token-level surface predicates to move
+            #   if the node has internal children, don't move
+            for sid, sem_node in enumerate(node.semantic_nodes):
+                if (not node.isToken) and sem_node.node_id not in internal_edge_from:
+                    token_index = -1
+                    if d_predicate.is_surface(sem_node.original_predicate):
+                        token_index = self.match_surface_predicate_token(sem_node.original_predicate, node.start_token_index, node.end_token_index)
+                    elif sem_node.carg is not None:
+                        token_index = self.match_surface_predicate_token(sem_node.carg, node.start_token_index, node.end_token_index)
 
+                    if token_index >= 0:
+                        token_id = self.token_node_list[token_index]
+                        new_preterminal = self.token_preterminal_node_map[token_id]
+                        self.nodes[new_preterminal].semantic_nodes.append(sem_node)
+                        self.dmrs_node_map[sem_node.node_id] = new_preterminal
+                        remove_sem_nodes.append(sid)
+                        # follow the chain
+                        # for some quantifiers, might be indended to span everything, but this seems good enough for now
+                        snode_id = sem_node.node_id 
+                        while snode_id in internal_edge_to:
+                            new_snode_id = -1
+                            for edge_i, parent_node_id in enumerate(internal_edge_from):
+                                if internal_edge_to[edge_i] == snode_id and internal_edge_from.count(parent_node_id) == 1:
+                                    sid = sem_node_ids.index(parent_node_id)
+                                    sem_node = node.semantic_nodes[sid]
+                                    self.nodes[new_preterminal].semantic_nodes.append(sem_node)
+
+                                    self.dmrs_node_map[sem_node.node_id] = new_preterminal
+                                    remove_sem_nodes.append(sid)
+                                    if parent_node_id in internal_edge_to:
+                                        #if new_snode_id >= 0: # almost never have 2 internal parents
+                                        new_snode_id = parent_node_id
+                            snode_id = new_snode_id
+
+        else:
+            semantic_anchor = semantic_parent
+
+        for i in sorted(remove_sem_nodes, reverse=True):
+            del node.semantic_nodes[i]
+            
+        # if current node is an overlapping node and it has nodes left, send to the spanning parent 
+        # (if all the arguments of the node is covered by one of the children, should ideally send down, but not now)
+        if node.node_id in self.overlapping_node_map and len(node.semantic_nodes) > 0:
+            parent_node_id = self.overlapping_node_map[node.node_id]
+            for i in range(len(node.semantic_nodes)-1, -1, -1):
+                self.nodes[parent_node_id].semantic_nodes.append(node.semantic_nodes[i])
+                del node.semantic_nodes[i]
+
+        for child_id in node.overlapping_node_ids:
+            self.process_semantic_tree(child_id, dmrs_rep, semantic_anchor)
+
+        # For token (preterminal) nodes, extract lemmas from predicates
+        if node.isToken:
+            if len(node.token_ids) == 1:
+                tok = self.token_nodes[node.token_ids[0]]
+                best_lemma_match_prob = 0.0
+                best_sid = -1
+                best_pred = ""
+                t_str = clean_token_lemma(tok.token_str)
+                for sid, sem_node in enumerate(node.semantic_nodes):
+                    if d_predicate.is_surface(sem_node.original_predicate):
+                        lemma, pos, sense = d_predicate.split(sem_node.original_predicate)
+                        pred = "_" + ("_".join([pos, sense]) if sense is not None else pos)
+                        seq = difflib.SequenceMatcher(a=lemma, b=t_str)
+                        lemma_match_prob = seq.ratio()
+                        if tok.lemma == "" or lemma_match_prob > best_lemma_match_prob:
+                            tok.lemma = lemma
+                            best_sid = sid
+                            best_pred = pred
+                            best_lemma_match_prob = lemma_match_prob
+                        if pred == "_u_unknown":
+                            tok.is_unknown = True
+                    if sem_node.carg is not None:
+                        if tok.carg == "":
+                            tok.carg = sem_node.carg
+                        # For multiple CARGs, just take first one as heuristic
+                if tok.carg != "":
+                    if tok.lemma == "":
+                        tok.lemma = tok.carg
+                    else:
+                        t_str = clean_token_lemma(tok.token_str, True)
+                        seq = difflib.SequenceMatcher(a=tok.carg, b=t_str)
+                        carg_match_prob = seq.ratio()
+                        if carg_match_prob > best_lemma_match_prob:
+                            tok.lemma = tok.carg
+                            best_lemma_match_prob = carg_match_prob
+                #if best_lemma_match_prob < 0.5 and tok.lemma != "" and tok.lemma != tok.carg:
+                #    print(tok.lemma, tok.token_str)
+                if best_sid >=0 and tok.lemma != tok.carg:
+                    node.semantic_nodes[best_sid].predicate = best_pred
+            elif len(node.token_ids) > 1:
+                matched_multi = False
+                for sem_node in node.semantic_nodes:
+                    if d_predicate.is_surface(sem_node.original_predicate):
+                        lemma, pos, sense = d_predicate.split(sem_node.original_predicate)
+                        if "-" in lemma:
+                            lemma_split = lemma.split("-")
+                            lemma_split[0] += "-"
+                        else:
+                            lemma_split = lemma.split("+")
+                        if len(lemma_split) == len(node.token_ids):
+                            pred = "_" + ("_".join([pos, sense]) if sense is not None else pos)
+                            sem_node.predicate = pred
+                            for i, tok_id in enumerate(node.token_ids):
+                                tok = self.token_nodes[tok_id]
+                                tok.lemma = lemma_split[i]
+                            matched_multi = True
+                            break
+                    #TODO match the carg if there is one
+
+                #if not matched_multi:
+                #    tokstr = [self.token_nodes[tok_id].token_str for tok_id in node.token_ids]
+                #    semstr = [sem_node.original_predicate for sem_node in node.semantic_nodes]
+                #    print("unmatched", node.token_form, tokstr, semstr)
+
+        for child_id in node.child_node_ids:
+            self.process_semantic_tree(child_id, dmrs_rep, semantic_anchor)
+      
 
 def read_profile(dirname):
     ts = d_itsdb.TestSuite(dirname)
@@ -415,24 +589,34 @@ def read_profile(dirname):
 
         # Map overlapping nodes
         for node in dmrs_rep.nodes:
-            if meaning_representation.dmrs_node_map[node.id][1] == -1:
+            if type(meaning_representation.dmrs_node_map[node.id]) == tuple:
                 meaning_representation.match_overlapping_dmrs_node(node)
                    
-        meaning_representation.link_dmrs_nodes(dmrs_rep)
+        #TODO test for property before this step, print out if matching
 
-        #print(sentence)
-        #print(meaning_representation.semantic_tree_str(meaning_representation.root_node_id))
+        meaning_representation.process_semantic_tree(meaning_representation.root_node_id, dmrs_rep)
+
+        print_full = False
+        print_overlapping = False
+        print_multitokens = False
+        print_non_surface = False
+
+        if print_full:
+            print(sentence)
+            print(meaning_representation.semantic_tree_str(meaning_representation.root_node_id))
+
         for node_id, node in meaning_representation.nodes.items():
-            if len(node.overlapping_node_ids) > 0:
+            if print_overlapping and len(node.overlapping_node_ids) > 0:
                  print(meaning_representation.semantic_tree_str(node_id))
-            #if len(node.token_ids) > 1:
-            #    print(meaning_representation.semantic_tree_str(node_id))
-            has_surface = False
-            for snode in node.semantic_nodes:
-                if (not node.isToken) and d_predicate.is_surface(snode.predicate):
-                    has_surface = True
-            #if has_surface:
-            #    print(meaning_representation.semantic_tree_str(node_id))
+            if print_multitokens and len(node.token_ids) > 1:
+                print(meaning_representation.semantic_tree_str(node_id))
+            if print_non_surface:
+                has_surface = False
+                for snode in node.semantic_nodes:
+                    if (not node.isToken) and d_predicate.is_surface(snode.original_predicate):
+                        has_surface = True
+                if has_surface:
+                    print(meaning_representation.semantic_tree_str(node_id))
         #break
 
 def main():
