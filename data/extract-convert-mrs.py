@@ -5,6 +5,7 @@ import argparse
 import json
 import difflib
 
+from delphin import tsql as d_tsql
 from delphin import itsdb as d_itsdb
 from delphin import dmrs as d_dmrs
 from delphin import derivation as d_derivation
@@ -12,6 +13,35 @@ from delphin import predicate as d_predicate
 from delphin import tokens as d_tokens
 from delphin.codecs import simplemrs as d_simplemrs
 from delphin import mrs as d_mrs
+from delphin import tdl as d_tdl
+from delphin import predicate as d_predicate
+
+
+class Lexicon():
+    def __init__(self, erg_path):
+        self.lex = {} # map syntactic name (in tree) to lexical entry
+        self.read_lexicon(erg_path)
+
+    def read_lexicon(self, erg_path):
+        #TODO extend to do more complex things
+        for event, obj, _ in d_tdl.iterparse(erg_path + "/lexicon.tdl"):
+            if event == 'TypeDefinition':
+                syntactic_name = obj.identifier
+                lexical_type = str(obj.conjunction.terms[0])
+                lemma = " ".join(map(str, obj['ORTH'].values())) 
+                if "SYNSEM" in obj: # else doesn't really matter
+                    semantic_predicate, carg = None, None
+                    if "LKEYS.KEYREL.PRED" in obj["SYNSEM"]:
+                        semantic_predicate = str(obj["SYNSEM"]["LKEYS.KEYREL.PRED"])
+                    if "LKEYS.KEYREL.CARG" in obj["SYNSEM"]:
+                        carg = str(obj["SYNSEM"]["LKEYS.KEYREL.CARG"])
+                    self.lex[syntactic_name] = (lemma, lexical_type, semantic_predicate, carg)
+
+    def get_lexical_type(self, name):
+        if name in self.lex:
+            return self.lex[name][1]
+        else:
+            return None
 
 
 class SemanticNode():
@@ -39,7 +69,7 @@ class Node():
         self.node_id = node_id
         self.syntax_labels = [syntax_label]
         self.phrase_labels = []
-        self.semantic_nodes = []
+        self.semantic_nodes = [] #TODO need to store indices here to make life easier
 
         self.semantic_parent_node = -1
         self.semantic_parent_edge_label = ""
@@ -54,14 +84,15 @@ class Node():
         self.token_ids = []
 
     def __str__(self):
-        return "%d:%d %s %s children:%d tokens: %s" % (self.start_token_index, self.end_token_index, str(self.syntax_labels), str(self.semantic_nodes), len(self.child_node_ids), str(self.token_ids))
+        return str([str(snode) for snode in self.semantic_nodes])
+        #return "%d:%d %s %s children:%d tokens: %s" % (self.start_token_index, self.end_token_index, str(self.syntax_labels), str(self.semantic_nodes), len(self.child_node_ids), str(self.token_ids))
 
 
 class Token():
     def __init__(self, token_id, tok=None):
         self.token_id = token_id
         if tok is not None:
-            self.token_str = tok.form
+            self.token_str = tok.form # TODO want the proper string from sentence here
             self.index = tok.start
             self.start_char = tok.lnk.data[0]
             self.end_char = tok.lnk.data[1]
@@ -139,7 +170,7 @@ def parse_token_tfs(node_token):
     if "+FORM \\" in tfs:
         form_i = tfs.index("+FORM \\") + len("+FORM \\") + 1 #TODO bug in finding end
         form = tfs[form_i:tfs.index("\\", start_i)]
-        print(form)
+        #print(form)
 
     return start_char, end_char, form
 
@@ -271,12 +302,33 @@ def create_preterminal_node_map(nodes):
     return token_preterminal_node_map
 
 
-class MeaningRepresentation():
-    def __init__(self, sentence, token_dict, derivation_rep):
+def match_surface_predicate_token(predicate, start_token_index, end_token_index, token_nodes, token_node_list):
+    match_prob = []
+    tkns = []
+    lemma, pos, sense = d_predicate.split(predicate)
+    if pos == 'u':
+        lemma = lemma[:lemma.rindex('/')]
+    for tok_index in range(start_token_index, end_token_index+1):
+        # id lookup bypasses the derivation node
+        token = token_nodes[token_node_list[tok_index]] 
+        t_str = clean_token_lemma(token.token_str, predicate.isdigit())
+        tkns.append(t_str)
+        seq = difflib.SequenceMatcher(a=t_str, b=lemma.lower())
+        match_prob.append(seq.ratio())
+    token_match = start_token_index + match_prob.index(max(match_prob))
+    if max(match_prob) == 0:
+        print(predicate, tkns)
+
+    return token_match
+
+
+class SyntacticRepresentation():
+    def __init__(self, sentence, token_dict, derivation_rep, lexicon=None):
         self.sentence = sentence
         self.token_dict = token_dict
         self.nodes = dict()
         self.token_nodes = dict()
+        self.lexicon = lexicon
 
         assert len(derivation_rep.daughters) == 1 
         self.root_node_id = self.build_derivation_tree(derivation_rep.daughters[0])
@@ -285,28 +337,8 @@ class MeaningRepresentation():
         self.token_node_list = create_token_node_list(self.token_nodes)
         self.start_char_token_map, self.end_char_token_map = create_char_token_maps(self.token_nodes)
         self.token_preterminal_node_map = create_preterminal_node_map(self.nodes)
-        self.overlapping_node_map = dict()
 
-        self.dmrs_node_map = dict()
-        self.token_sequence = [] # Ordered tokens. Format (token_id, token_position_index, form, lemma or unknown)
- 
-
-    def semantic_tree_str(self, node_id, level=0, newline=False, overlapping=False):
-        node = self.nodes[node_id]
-        out_str = "\n" + " "*level if newline else ""
-        if overlapping:
-            out_str += "*" + str(node.start_token_index) + ":" + str(node.end_token_index) + " "
-        out_str += "(" + str([str(s_node.node_id) + ":" + s_node.original_predicate for s_node in node.semantic_nodes]) + " "
-        for child_id in node.overlapping_node_ids:
-            out_str += self.semantic_tree_str(child_id, level+4, True, True) + " "
-        for child_id in node.child_node_ids:
-            join_line = len(node.overlapping_node_ids) == 0 and child_id == node.child_node_ids[0] and len(node.semantic_nodes) == 0
-            out_str += self.semantic_tree_str(child_id, level+4, not join_line) + " "
-        for token_id in node.token_ids:
-            token_node = self.token_nodes[token_id]
-            out_str += token_node.token_str + " "
-
-        return out_str + ")"
+        self.token_sequence = [] # Ordered tokens. Format (token_id, token_position_index, form, lemma or unknown) #TODO 
 
 
     def build_derivation_tree(self, drv_node):
@@ -338,6 +370,112 @@ class MeaningRepresentation():
         self.nodes[new_node.node_id] = new_node
         return new_node.node_id 
 
+    def derivation_tree_str(self, node_id, level=0, newline=False):
+        node = self.nodes[node_id]
+        out_str = "\n" + " "*level if newline else ""
+
+        unary_count = 0 
+        for label in node.syntax_labels:
+            if label.endswith("_c") and not (len(node.token_ids) > 0 and label == node.syntax_labels[-1]):
+                out_str += "(" + label + " "
+                unary_count += 1
+            else:
+                break
+
+        out_str += " ".join([self.derivation_tree_str(child_id, level+4, newline) for child_id in node.child_node_ids])
+
+        out_str += " ".join(['(X ' + self.token_nodes[token_id].token_str + ')' for token_id in node.token_ids])
+
+        out_str += ")"*unary_count
+        return out_str
+
+
+    def supertag_str(self, node_id):
+        tags, words = self.supertag_tuple(node_id)
+        tag_str = ""
+        for tag, word in zip(tags, words):
+            tag_str += "[" + ";".join(tag) + "] " + " ".join(word) + " "
+        return tag_str.strip()
+
+
+    def supertag_tuple(self, node_id):
+        node = self.nodes[node_id]
+
+        tag = []
+        tag_state = False
+        for label in node.syntax_labels:
+            if tag_state or (not label.endswith("_c")) or (len(node.token_ids) > 0 and label == node.syntax_labels[-1]):
+                tag_state = True
+                tag.append(label)
+
+        if len(tag) > 0:
+            lex_type = self.lexicon.get_lexical_type(tag[-1])
+            if lex_type is not None:
+                tag[-1] = lex_type
+            elif not (tag[-1].startswith("generic") or tag[-1].startswith("punct_")):
+                print(tag[-1])
+
+        assert not (len(tag) > 0 and len(node.child_node_ids) > 0), tag
+
+        tags = []
+        words = []
+
+        for child_id in node.child_node_ids:
+            child_tags, child_words = self.supertag_tuple(child_id)
+            tags.extend(child_tags)
+            words.extend(child_words)
+
+        word = [self.token_nodes[token_id].token_str for token_id in node.token_ids]
+        if len(word) > 0:
+            assert len(tag) > 0, word
+            tags = [tag]
+            words = [word]
+
+        return tags, words
+
+
+class SemanticRepresentation(SyntacticRepresentation):
+    def __init__(self, sentence, token_dict, derivation_rep, lexicon=None):
+        super().__init__(sentence, token_dict, derivation_rep, lexicon)
+
+        self.dmrs_node_map = dict()
+        self.overlapping_node_map = dict()
+ 
+
+    def semantic_tree_str(self, node_id, level=0, newline=False, overlapping=False):
+        node = self.nodes[node_id]
+        out_str = "\n" + " "*level if newline else ""
+        if overlapping:
+            out_str += "*" + str(node.start_token_index) + ":" + str(node.end_token_index) + " "
+        out_str += "(" + str([str(s_node.node_id) + ":" + s_node.predicate for s_node in node.semantic_nodes]) + " "
+        for child_id in node.overlapping_node_ids:
+            out_str += self.semantic_tree_str(child_id, level+4, True, True) + " "
+        for child_id in node.child_node_ids:
+            join_line = len(node.overlapping_node_ids) == 0 and child_id == node.child_node_ids[0] and len(node.semantic_nodes) == 0
+            out_str += self.semantic_tree_str(child_id, level+4, not join_line) + " "
+        for token_id in node.token_ids:
+            token_node = self.token_nodes[token_id]
+            if token_node.is_unknown:
+                out_str += "{<unk>} "
+            elif token_node.lemma == "":
+                out_str += "{<none>} "
+            else:
+                out_str += "{%s} " % (token_node.lemma)
+            out_str += token_node.token_str + " "
+
+        return out_str + ")"
+
+
+    def map_dmrs(self, dmrs_rep):
+        # Map dmrs nodes to the meaning representation
+        for node in dmrs_rep.nodes:
+            self.map_dmrs_node(node)
+
+        # Map overlapping nodes
+        for node in dmrs_rep.nodes:
+            if type(self.dmrs_node_map[node.id]) == tuple:
+                self.match_overlapping_dmrs_node(node)
+ 
 
     def map_dmrs_node(self, node):
         assert node.lnk.data[0] in self.start_char_token_map and node.lnk.data[1] in self.end_char_token_map, "MRS predicate not matching tokens: " + str(node.original_predicate) + " " + str(node.lnk)
@@ -356,26 +494,6 @@ class MeaningRepresentation():
             self.dmrs_node_map[node.id] = (-1, start_token, end_token)
         
         return matched_node
-
-
-    def match_surface_predicate_token(self, predicate, start_token_index, end_token_index):
-        match_prob = []
-        tkns = []
-        lemma, pos, sense = d_predicate.split(predicate)
-        if pos == 'u':
-            lemma = lemma[:lemma.rindex('/')]
-        for tok_index in range(start_token_index, end_token_index+1):
-            # id lookup bypasses the derivation node
-            token = self.token_nodes[self.token_node_list[tok_index]] 
-            t_str = clean_token_lemma(token.token_str, predicate.isdigit())
-            tkns.append(t_str)
-            seq = difflib.SequenceMatcher(a=t_str, b=lemma.lower())
-            match_prob.append(seq.ratio())
-        token_match = start_token_index + match_prob.index(max(match_prob))
-        if max(match_prob) == 0:
-            print(predicate, tkns)
-
-        return token_match
 
 
     def match_overlapping_dmrs_node(self, node):
@@ -449,9 +567,9 @@ class MeaningRepresentation():
                 if (not node.isToken) and sem_node.node_id not in internal_edge_from:
                     token_index = -1
                     if d_predicate.is_surface(sem_node.original_predicate):
-                        token_index = self.match_surface_predicate_token(sem_node.original_predicate, node.start_token_index, node.end_token_index)
+                        token_index = match_surface_predicate_token(sem_node.original_predicate, node.start_token_index, node.end_token_index, self.token_nodes, self.token_node_list)
                     elif sem_node.carg is not None:
-                        token_index = self.match_surface_predicate_token(sem_node.carg, node.start_token_index, node.end_token_index)
+                        token_index = match_surface_predicate_token(sem_node.carg, node.start_token_index, node.end_token_index, self.token_nodes, self.token_node_list)
 
                     if token_index >= 0:
                         token_id = self.token_node_list[token_index]
@@ -553,16 +671,54 @@ class MeaningRepresentation():
                             break
                     #TODO match the carg if there is one
 
-                #if not matched_multi:
-                #    tokstr = [self.token_nodes[tok_id].token_str for tok_id in node.token_ids]
-                #    semstr = [sem_node.original_predicate for sem_node in node.semantic_nodes]
-                #    print("unmatched", node.token_form, tokstr, semstr)
+                if matched_multi:
+                    tokstr = [self.token_nodes[tok_id].token_str for tok_id in node.token_ids]
+                    semstr = [sem_node.original_predicate for sem_node in node.semantic_nodes]
+                    #print("matched", node.token_form, tokstr, semstr)
 
         for child_id in node.child_node_ids:
             self.process_semantic_tree(child_id, dmrs_rep, semantic_anchor)
-      
+ 
 
-def read_profile(dirname):
+    def classify_edges(self, dmrs_rep):
+        # argument is non-terminal
+        for edge in dmrs_rep.links:
+            if not self.nodes[self.dmrs_node_map[edge.end]].isToken:
+                start_node = self.dmrs_node_map[edge.start]
+                start_snode_ids = [snode.node_id for snode in self.nodes[start_node].semantic_nodes]
+                start_snode = self.nodes[start_node].semantic_nodes[start_snode_ids.index(edge.start)]
+                print(start_snode.predicate, edge.role)
+                print(self.nodes[self.dmrs_node_map[edge.start]], self.nodes[self.dmrs_node_map[edge.end]])
+
+
+def read_profile(dirname, erg_path):
+    ts = d_itsdb.TestSuite(dirname)
+    profile_name = get_profile_name(dirname)
+    lexicon = Lexicon(erg_path)
+ 
+    for sentence, parse_tokens, result_derivation, result_mrs in d_tsql.select('i-input p-tokens derivation mrs', ts):
+        tokens_rep = d_tokens.YYTokenLattice.from_string(parse_tokens)
+        token_dict = {tok.id : tok for tok in tokens_rep.tokens}
+        derivation_rep = d_derivation.from_string(result_derivation)
+
+        try:
+            mrs_rep = d_simplemrs.decode(result_mrs)
+        except d_mrs._exceptions.MRSSyntaxError:
+            #print("Skipping: MRS syntax error", result_mrs)
+            continue
+
+        dmrs_rep = d_dmrs.from_mrs(mrs_rep)
+
+        mr = SemanticRepresentation(sentence, token_dict, derivation_rep, lexicon) # read derivation tree
+        mr.map_dmrs(dmrs_rep)
+        mr.process_semantic_tree(mr.root_node_id, dmrs_rep)
+
+        #TODO method to print out examples
+        mr.derivation_tree_str(mr.root_node_id, newline=False).lstrip()
+        mr.supertag_str(mr.root_node_id).strip()
+
+
+def read_profile_old(dirname):
     ts = d_itsdb.TestSuite(dirname)
     profile_name = get_profile_name(dirname)
 
@@ -596,6 +752,10 @@ def read_profile(dirname):
 
         meaning_representation.process_semantic_tree(meaning_representation.root_node_id, dmrs_rep)
 
+        #meaning_representation.classify_edges(dmrs_rep)
+
+        # Print out examples
+
         print_full = False
         print_overlapping = False
         print_multitokens = False
@@ -622,10 +782,11 @@ def read_profile(dirname):
 def main():
     argparser = argparse.ArgumentParser()
     argparser.add_argument('-i', '--input', help='directory path to a profile')
+    argparser.add_argument('--erg', help='directory path to ERG', default="original/erg1214")
     args = argparser.parse_args()
     assert args.input and os.path.isdir(args.input), "Invalid input path"
     
-    read_profile(args.input)
+    read_profile(args.input, args.erg)
 
 
 if __name__ == '__main__':
