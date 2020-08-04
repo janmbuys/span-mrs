@@ -691,11 +691,14 @@ class SemanticRepresentation(SyntacticRepresentation):
                 print(self.nodes[self.dmrs_node_map[edge.start]], self.nodes[self.dmrs_node_map[edge.end]])
 
 
-def read_profile(dirname, erg_path):
-    ts = d_itsdb.TestSuite(dirname)
-    profile_name = get_profile_name(dirname)
-    lexicon = Lexicon(erg_path)
+def read_profile(args):
+    ts = d_itsdb.TestSuite(args.input)
+    profile_name = get_profile_name(args.input)
+    lexicon = Lexicon(args.grammar)
  
+    derivation_strs = []
+    supertag_strs = []
+
     for sentence, parse_tokens, result_derivation, result_mrs in d_tsql.select('i-input p-tokens derivation mrs', ts):
         tokens_rep = d_tokens.YYTokenLattice.from_string(parse_tokens)
         token_dict = {tok.id : tok for tok in tokens_rep.tokens}
@@ -710,48 +713,30 @@ def read_profile(dirname, erg_path):
         dmrs_rep = d_dmrs.from_mrs(mrs_rep)
 
         mr = SemanticRepresentation(sentence, token_dict, derivation_rep, lexicon) # read derivation tree
-        mr.map_dmrs(dmrs_rep)
-        mr.process_semantic_tree(mr.root_node_id, dmrs_rep)
+
+        if args.convert_semantics:
+            mr.map_dmrs(dmrs_rep)
+            mr.process_semantic_tree(mr.root_node_id, dmrs_rep)
 
         #TODO method to print out examples
-        mr.derivation_tree_str(mr.root_node_id, newline=False).lstrip()
-        mr.supertag_str(mr.root_node_id).strip()
+        if args.extract_syntax:
+            derivation_strs.append(mr.derivation_tree_str(mr.root_node_id, newline=False).lstrip())
+            supertag_strs.append(mr.supertag_str(mr.root_node_id).strip())
+
+    if args.extract_syntax:
+        with open(args.output + ".dt", 'w') as dt_out:
+            for s in derivation_strs:
+                dt_out.write(s + "\n")
+        with open(args.output + ".st", 'w') as st_out:
+            for s in supertag_strs:
+                st_out.write(s + "\n")
 
 
 def read_profile_old(dirname):
     ts = d_itsdb.TestSuite(dirname)
     profile_name = get_profile_name(dirname)
 
-    tokenization_dict = get_tokenization(ts['item'], ts['parse'])
-
-    for result in ts['result']:
-        #constituency_tree = result['tree'] #TODO put in derivation tree
-        
-        dmrs_rep = get_dmrs(result['mrs'])
-        if dmrs_rep is None:
-            continue
-
-        assert result['parse-id'] in tokenization_dict, "Non tokenization for parse:" + str(result['parse-id'])
-        sentence, token_dict = tokenization_dict[result['parse-id']]
-        derivation_rep = d_derivation.from_string(result['derivation'])
-
-        meaning_representation = MeaningRepresentation(sentence, token_dict, derivation_rep)
-
-        # Map dmrs nodes to the meaning representation
-        unmatched = False
-        for node in dmrs_rep.nodes:
-            matched_node = meaning_representation.map_dmrs_node(node)
-            unmatched = unmatched or not matched_node
-
-        # Map overlapping nodes
-        for node in dmrs_rep.nodes:
-            if type(meaning_representation.dmrs_node_map[node.id]) == tuple:
-                meaning_representation.match_overlapping_dmrs_node(node)
-                   
-        #TODO test for property before this step, print out if matching
-
-        meaning_representation.process_semantic_tree(meaning_representation.root_node_id, dmrs_rep)
-
+    if True: #TODO print method
         #meaning_representation.classify_edges(dmrs_rep)
 
         # Print out examples
@@ -782,11 +767,15 @@ def read_profile_old(dirname):
 def main():
     argparser = argparse.ArgumentParser()
     argparser.add_argument('-i', '--input', help='directory path to a profile')
-    argparser.add_argument('--erg', help='directory path to ERG', default="original/erg1214")
+    argparser.add_argument('-o', '--output', help='directory path to output')
+    argparser.add_argument('-g', '--grammar', help='directory path to the ERG', default="data/original/erg1214")
+    argparser.add_argument('--extract_syntax', action="store_true", help='extract derivation tree and supertags')
+    argparser.add_argument('-c', '--convert_semantics', action="store_true", help='convert span-based DMRS')
+
     args = argparser.parse_args()
     assert args.input and os.path.isdir(args.input), "Invalid input path"
     
-    read_profile(args.input, args.erg)
+    read_profile(args)
 
 
 if __name__ == '__main__':

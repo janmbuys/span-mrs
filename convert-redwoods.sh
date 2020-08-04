@@ -185,24 +185,24 @@ testsuites=(
   "?wsj21d"
 )
 
-base="original/redwoods1214"
-outbase="extracted/out"
+base="data/original/erg1214/tsdb/gold/"
+outbase="data/extracted/"
 mkdir -p $outbase/{train,dev,test}
-> $outbase/all.out
-> $outbase/all.err
+> "$outbase/all.out"
+> "$outbase/all.err"
+
 for ts in ${testsuites[*]}; do
     prefix="${ts:0:1}"
     name="${ts:1}"
     case "$prefix" in
-      "+") outpath="$outbase/train/${name}.txt"; errpath="$outbase/train/${name}.err" ;;
-      "=") outpath="$outbase/dev/${name}.txt"  ; errpath="$outbase/dev/${name}.err" ;;
-      "?") outpath="$outbase/test/${name}.txt" ; errpath="$outbase/test/${name}.err" ;;
+      "+") outpath="$outbase/train/${name}" ;;
+      "=") outpath="$outbase/dev/${name}" ;;
+      "?") outpath="$outbase/test/${name}" ;;
       *)
         echo "Testsuite not designated as train (+), dev (=) or test (?): $ts"
         exit 1
         ;;
     esac
     echo "Converting $base/$name" >&2
-    python extract-convert-mrs.py -i "$base/$name" >> "$outbase/all.out" 2>> "$outbase/all.err"
-    #python extract-mrs.py -i "$base/$name" > "$outpath" 2>> "$errpath"
+    python data/extract-convert-mrs.py -i "$base/$name" -o "$outpath" --extract_syntax >> "$outbase/all.out" 2>> "$outbase/all.err"
 done
