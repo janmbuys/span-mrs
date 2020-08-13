@@ -116,42 +116,6 @@ def get_profile_name(dirname):
     return dirname[dirname.rindex('/')+1:]
 
 
-def get_sentences(items):
-    sentences = dict()
-    for item in items:
-        sentence_id = item['i-id']
-        sentences[sentence_id] = item['i-input']
-    return sentences
-
-
-def get_tokenization(items, parses):
-    sentences = get_sentences(items)
-
-    tokenization_dict = dict()
-    for parse in parses:
-        if parse['p-tokens'] is not None:
-            assert parse['i-id'] in sentences, "No matching sentence: " + str(parse[:])
-            tokens_rep = d_tokens.YYTokenLattice.from_string(parse['p-tokens'])
-            token_dict = {tok.id : tok for tok in tokens_rep.tokens}
-            tokenization_dict[parse['parse-id']] = (sentences[parse['i-id']], token_dict)
-    return tokenization_dict
-
-
-def get_dmrs(mrs_str):
-    # read and convert MRS
-    try:
-        mrs_rep = d_simplemrs.loads(mrs_str)
-        assert len(mrs_rep) == 1, "No unique MRS in example"
-        try: 
-            dmrs_rep = d_dmrs.from_mrs(mrs_rep[0])
-            return dmrs_rep
-        except KeyError: # "DMRS conversion error"
-            return None
-
-    except d_mrs._exceptions.MRSSyntaxError:
-        return None
-
-
 def parse_token_tfs(node_token):
     tfs = node_token.tfs
     start_char, end_char, form = -1, -1, ""
@@ -503,6 +467,25 @@ class SemanticRepresentation(SyntacticRepresentation):
         return json.dumps(dmrs_dict)
 
 
+    def print_mrs(self, print_full=False, print_overlapping=False, print_multitokens=False, print_non_surface=False):
+        if print_full:
+            print(self.sentence)
+            print(self.semantic_tree_str(meaning_representation.root_node_id))
+
+        for node_id, node in self.nodes.items():
+            if print_overlapping and len(node.overlapping_node_ids) > 0:
+                 print(self.semantic_tree_str(node_id))
+            if print_multitokens and len(node.token_ids) > 1:
+                print(self.semantic_tree_str(node_id))
+            if print_non_surface:
+                has_surface = False
+                for snode in node.semantic_nodes:
+                    if (not node.isToken) and d_predicate.is_surface(snode.original_predicate):
+                        has_surface = True
+                if has_surface:
+                    print(self.semantic_tree_str(node_id))
+
+
     def map_dmrs(self, dmrs_rep):
         # Map dmrs nodes to the meaning representation
         for node in dmrs_rep.nodes:
@@ -759,7 +742,7 @@ def read_profile(args):
             mr.map_dmrs(dmrs_rep)
             mr.process_semantic_tree(mr.root_node_id, dmrs_rep)
 
-        #TODO method to print out examples
+        mr.print_mrs()
 
         if args.extract_syntax:
             derivation_strs.append(mr.derivation_tree_str(mr.root_node_id, newline=False).lstrip())
@@ -782,38 +765,6 @@ def read_profile(args):
                 if s != "":
                     d_out.write(s + "\n")
  
-
-def read_profile_old(dirname):
-    ts = d_itsdb.TestSuite(dirname)
-    profile_name = get_profile_name(dirname)
-
-    if True: #TODO print method
-        #meaning_representation.classify_edges(dmrs_rep)
-
-        # Print out examples
-
-        print_full = False
-        print_overlapping = False
-        print_multitokens = False
-        print_non_surface = False
-
-        if print_full:
-            print(sentence)
-            print(meaning_representation.semantic_tree_str(meaning_representation.root_node_id))
-
-        for node_id, node in meaning_representation.nodes.items():
-            if print_overlapping and len(node.overlapping_node_ids) > 0:
-                 print(meaning_representation.semantic_tree_str(node_id))
-            if print_multitokens and len(node.token_ids) > 1:
-                print(meaning_representation.semantic_tree_str(node_id))
-            if print_non_surface:
-                has_surface = False
-                for snode in node.semantic_nodes:
-                    if (not node.isToken) and d_predicate.is_surface(snode.original_predicate):
-                        has_surface = True
-                if has_surface:
-                    print(meaning_representation.semantic_tree_str(node_id))
-        #break
 
 def main():
     argparser = argparse.ArgumentParser()
