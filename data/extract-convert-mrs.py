@@ -323,7 +323,8 @@ def match_surface_predicate_token(predicate, start_token_index, end_token_index,
 
 
 class SyntacticRepresentation():
-    def __init__(self, sentence, token_dict, derivation_rep, lexicon=None):
+    def __init__(self, sid, sentence, token_dict, derivation_rep, lexicon=None):
+        self.sid = sid
         self.sentence = sentence
         self.token_dict = token_dict
         self.nodes = dict()
@@ -435,8 +436,8 @@ class SyntacticRepresentation():
 
 
 class SemanticRepresentation(SyntacticRepresentation):
-    def __init__(self, sentence, token_dict, derivation_rep, lexicon=None):
-        super().__init__(sentence, token_dict, derivation_rep, lexicon)
+    def __init__(self, sid, sentence, token_dict, derivation_rep, lexicon=None):
+        super().__init__(sid, sentence, token_dict, derivation_rep, lexicon)
 
         self.dmrs_node_map = dict()
         self.overlapping_node_map = dict()
@@ -464,6 +465,42 @@ class SemanticRepresentation(SyntacticRepresentation):
             out_str += token_node.token_str + " "
 
         return out_str + ")"
+    
+    
+    def dmrs_json_str(self, dmrs_rep):
+        dmrs_dict = {}
+        dmrs_dict["id"] = self.sid.split(":")[1]
+        dmrs_dict["source"] = self.sid.split(":")[0]
+        dmrs_dict["input"] = self.sentence
+        dmrs_dict["tokens"] = []
+        dmrs_dict["nodes"] = []
+        dmrs_dict["edges"] = []
+
+        for i, token_id in enumerate(self.token_node_list):
+            token = self.token_nodes[token_id]
+            dmrs_dict["tokens"].append({"index": i, "form": token.token_str, "lemma": token.token_str if token.lemma == "" else token.lemma})
+            if token.carg != "":
+                dmrs_dict["tokens"][-1]["carg"] = token.carg 
+        
+        new_node_ids = {}
+        for deriv_node_id, deriv_node in self.nodes.items():
+            for sem_node in deriv_node.semantic_nodes:
+                new_id = len(new_node_ids)
+                new_node_ids[sem_node.node_id] = new_id
+                dmrs_dict["nodes"].append({"id": new_id, "label": sem_node.original_predicate, "anchors": [{"from": deriv_node.start_token_index, "end": deriv_node.end_token_index}]})
+
+        if dmrs_rep.top is None or dmrs_rep.top not in new_node_ids:
+            dmrs_dict["tops"] = []
+        else:
+            dmrs_dict["tops"] = [new_node_ids[dmrs_rep.top]]
+
+        for edge in dmrs_rep.links:
+            if not (edge.start in new_node_ids and edge.end in new_node_ids):
+                print(edge.role)
+                continue
+            dmrs_dict["edges"].append({"source": new_node_ids[edge.start], "target": new_node_ids[edge.end], "label": edge.role, "post-label": edge.post})
+
+        return json.dumps(dmrs_dict)
 
 
     def map_dmrs(self, dmrs_rep):
@@ -632,6 +669,9 @@ class SemanticRepresentation(SyntacticRepresentation):
                             best_pred = pred
                             best_lemma_match_prob = lemma_match_prob
                         if pred == "_u_unknown":
+                            if "/" in lemma:
+                                tok.lemma = lemma[:lemma.rindex("/")]
+                                sem_node.original_predicate = "_" + tok.lemma + pred
                             tok.is_unknown = True
                     if sem_node.carg is not None:
                         if tok.carg == "":
@@ -698,8 +738,9 @@ def read_profile(args):
  
     derivation_strs = []
     supertag_strs = []
+    dmrs_json_strs = []
 
-    for sentence, parse_tokens, result_derivation, result_mrs in d_tsql.select('i-input p-tokens derivation mrs', ts):
+    for iid, sentence, parse_tokens, result_derivation, result_mrs in d_tsql.select('i-id i-input p-tokens derivation mrs', ts):
         tokens_rep = d_tokens.YYTokenLattice.from_string(parse_tokens)
         token_dict = {tok.id : tok for tok in tokens_rep.tokens}
         derivation_rep = d_derivation.from_string(result_derivation)
@@ -712,16 +753,20 @@ def read_profile(args):
 
         dmrs_rep = d_dmrs.from_mrs(mrs_rep)
 
-        mr = SemanticRepresentation(sentence, token_dict, derivation_rep, lexicon) # read derivation tree
+        mr = SemanticRepresentation(profile_name + ":" + iid, sentence, token_dict, derivation_rep, lexicon) # read derivation tree
 
         if args.convert_semantics:
             mr.map_dmrs(dmrs_rep)
             mr.process_semantic_tree(mr.root_node_id, dmrs_rep)
 
         #TODO method to print out examples
+
         if args.extract_syntax:
             derivation_strs.append(mr.derivation_tree_str(mr.root_node_id, newline=False).lstrip())
             supertag_strs.append(mr.supertag_str(mr.root_node_id).strip())
+
+        if args.extract_semantics:
+            dmrs_json_strs.append(mr.dmrs_json_str(dmrs_rep))
 
     if args.extract_syntax:
         with open(args.output + ".dt", 'w') as dt_out:
@@ -731,6 +776,12 @@ def read_profile(args):
             for s in supertag_strs:
                 st_out.write(s + "\n")
 
+    if args.extract_semantics:
+        with open(args.output + ".dmrs", 'w') as d_out:
+            for s in dmrs_json_strs:
+                if s != "":
+                    d_out.write(s + "\n")
+ 
 
 def read_profile_old(dirname):
     ts = d_itsdb.TestSuite(dirname)
@@ -771,6 +822,7 @@ def main():
     argparser.add_argument('-g', '--grammar', help='directory path to the ERG', default="data/original/erg1214")
     argparser.add_argument('--extract_syntax', action="store_true", help='extract derivation tree and supertags')
     argparser.add_argument('-c', '--convert_semantics', action="store_true", help='convert span-based DMRS')
+    argparser.add_argument('--extract_semantics', action="store_true", help='convert span-based DMRS')
 
     args = argparser.parse_args()
     assert args.input and os.path.isdir(args.input), "Invalid input path"
