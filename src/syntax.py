@@ -79,30 +79,70 @@ def create_char_token_maps(token_nodes):
     return start_char_token_map, end_char_token_map
 
 
-def parse_node_token(node_token, token_dict):
+def normalize_parse_tree_token(token_str):
+    repls = [("(", "-LRB-"),(")", "-RRB-"), ("[", "-LSB-"),("]", "-RSB-"), ("{", "-LCB-"),("}", "-RCB-")]
+
+    for repl in repls:
+        token_str = token_str.replace(*repl)
+    
+    return token_str
+
+
+def parse_token_tfs(node_token):
+    tfs = node_token.tfs
+    start_char, end_char, form = -1, -1, ""
+
+    if "+FROM #1=\\" in tfs:
+        start_i = tfs.index("+FROM #1=\\") + len("+FROM #1=\\") + 1
+        start_char = int(tfs[start_i:tfs.index("\\", start_i)])
+    elif "+FROM \\" in tfs:
+        start_i = tfs.index("+FROM \\") + len("+FROM \\") + 1
+        start_char = int(tfs[start_i:tfs.index("\\", start_i)])
+
+    if "+TO \\" in tfs:
+        end_i = tfs.index("+TO \\") + len("+TO \\") + 1
+        end_char = int(tfs[end_i:tfs.index("\\", end_i)])
+
+    return start_char, end_char
+
+
+def parse_node_token(node_token, token_dict, sentence):
     token_node_id = node_token.id
 
     if token_node_id in token_dict:
         tok = token_dict[token_node_id]
+        new_tokens = []
         if tok.start == tok.end-1:
-            new_token = Token(token_node_id, tok)
-            return [new_token]
+            new_tokens = [Token(token_node_id, tok)]
         else:
-            new_tokens = []
             # Split up multitokens
+            tok_start_char, tok_end_char = tok.lnk.data[0], tok.lnk.data[1]
+            tok_current_char = tok_start_char
             for i in range(tok.start, tok.end):
                 matched = False
                 for tid, ttoken in token_dict.items():
                     if ttoken.start == i and ttoken.end == i+1:
-                        new_tokens.append(Token(ttoken.id, ttoken)) 
+                        sub_token = Token(ttoken.id, ttoken) 
+                        current_end_char = tok_current_char + len(sub_token.token_str)
+                        sub_token.start_char, sub_token.end_char = tok_current_char, current_end_char
+                        sub_token_str = sentence[sub_token.start_char:sub_token.end_char].strip() 
+                        if sub_token_str != sub_token.token_str:
+                            print(sub_token_str, sub_token.token_str)
+                            sub_token.token_str = sub_token_str
+
+                        new_tokens.append(sub_token)
+                        tok_current_char = current_end_char
                         matched = True
                         break
                 assert matched, "Unmatched token in multitoken"
-            return new_tokens
+
+        return new_tokens
     else:
         new_token = Token(token_node_id)
-        new_token.start_char, new_token.end_char, new_token.token_str = parse_token_tfs(node_token)
+        new_token.start_char, new_token.end_char = parse_token_tfs(node_token)
         assert new_token.start_char >= 0 and new_token.end_char >= 0, "Can't parse token " + str(tfs)
+
+        new_token.token_str = sentence[new_token.start_char:new_token.end_char].strip()
 
         new_token.index, _ = match_token_vertex(new_token, token_dict)
         assert new_token.index >= 0, "No matching token for derivation token " + str(tfs)
@@ -196,9 +236,10 @@ class SyntacticRepresentation():
 
         self.span_node_map = create_span_node_map(self.nodes)
         self.token_node_list = create_token_node_list(self.token_nodes)
-        self.start_char_token_map, self.end_char_token_map = create_char_token_maps(self.token_nodes)
         self.token_preterminal_node_map = create_preterminal_node_map(self.nodes)
 
+        self.normalize_token_span_strs()
+        self.start_char_token_map, self.end_char_token_map = create_char_token_maps(self.token_nodes)
         self.token_sequence = [] # Ordered tokens. Format (token_id, token_position_index, form, lemma or unknown) #TODO 
 
 
@@ -217,7 +258,7 @@ class SyntacticRepresentation():
             new_node.isToken = True
             new_node.token_form = drv_node.form
             for node_token in drv_node.tokens:
-                new_tokens = parse_node_token(node_token, self.token_dict)
+                new_tokens = parse_node_token(node_token, self.token_dict, self.sentence)
                 for new_token in new_tokens:
                     new_node.token_ids.append(new_token.token_id)
                     self.token_nodes[new_token.token_id] = new_token
@@ -230,6 +271,66 @@ class SyntacticRepresentation():
             
         self.nodes[new_node.node_id] = new_node
         return new_node.node_id 
+
+
+    def normalize_token_span_strs(self):
+        multi_span = False
+        current_char = -1
+
+        self.sentence = self.sentence.replace("–","-")
+
+        for i, tid in enumerate(self.token_node_list):
+            if i == 0:
+                current_token = self.token_nodes[tid]
+            else:
+                current_token = next_token
+
+            if i < len(self.token_node_list) - 1:
+                next_tid = self.token_node_list[i+1]
+                next_token = self.token_nodes[next_tid]
+
+            init_token_str = current_token.token_str
+            sentence_str = self.sentence[current_token.start_char:current_token.end_char].strip()
+            current_token.token_str = current_token.token_str.replace("–","-").replace("…", "...").replace("’", "'").replace("‘", "`")
+            if "\"" in sentence_str:
+                current_token.token_str = current_token.token_str.replace("“","\"").replace("”", "\"")
+            else:
+                current_token.token_str = current_token.token_str.replace("“","``").replace("”", "''")
+
+            if i < len(self.token_node_list) - 1 and not multi_span:
+                if current_token.end_char > next_token.start_char:
+                    multi_span = True
+                    span_end_char = current_token.end_char
+                    if sentence_str.lower().startswith(current_token.token_str.lower()):
+                        end_char = current_token.start_char + len(current_token.token_str)
+                        current_token.end_char = end_char
+                        current_char = end_char
+                    else:
+                        print("Multispan not matching", sentence_str, current_token.token_str)
+                else:
+                    current_char = current_token.end_char
+                    if len(current_token.token_str) + 1 < len(sentence_str): 
+                        print("Not matching", sentence_str, current_token.token_str) 
+                    current_token.token_str = sentence_str 
+
+            elif multi_span:
+                sentence_str = self.sentence[current_char:current_token.end_char].strip()
+                if sentence_str.lower().startswith(current_token.token_str.lower()):
+                    current_token.start_char = current_char
+                    end_char = current_token.start_char + len(current_token.token_str)
+                    current_token.end_char = end_char
+                    current_char = end_char
+                else:
+                    print("Multispan not matching", sentence_str, current_token.token_str)
+
+                if not current_token.end_char > next_token.start_char:
+                    multi_span = False
+            else:
+                current_char = current_token.end_char
+                if len(current_token.token_str) != len(sentence_str): 
+                    print("Not matching", sentence_str, current_token.token_str) 
+                current_token.token_str = sentence_str 
+
 
     def derivation_tree_str(self, node_id, level=0, newline=False):
         node = self.nodes[node_id]
@@ -245,7 +346,7 @@ class SyntacticRepresentation():
 
         out_str += " ".join([self.derivation_tree_str(child_id, level+4, newline) for child_id in node.child_node_ids])
 
-        out_str += " ".join(['(X ' + self.token_nodes[token_id].token_str + ')' for token_id in node.token_ids])
+        out_str += " ".join(['(X ' + normalize_parse_tree_token(self.token_nodes[token_id].token_str) + ')' for token_id in node.token_ids])
 
         out_str += ")"*unary_count
         return out_str
@@ -255,6 +356,7 @@ class SyntacticRepresentation():
         tags, words = self.supertag_tuple(node_id)
         tag_str = ""
         for tag, word in zip(tags, words):
+            #n_word = [normalize_parse_tree_token(w) for w in word] # don't use for now
             tag_str += "[" + ";".join(tag) + "] " + " ".join(word) + " "
         return tag_str.strip()
 

@@ -204,5 +204,5 @@ for ts in ${testsuites[*]}; do
         ;;
     esac
     echo "Converting $base/$name" >&2
-    python data/extract-convert-mrs.py -i "$base/$name" -o "$outpath" --extract_syntax >> "$outbase/all.out" 2>> "$outbase/all.err"
+    python src/extract-convert-mrs.py -i "$base/$name" -o "$outpath" --extract_syntax >> "$outbase/all.out" 2>> "$outbase/all.err"
 done

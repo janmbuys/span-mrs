@@ -47,29 +47,6 @@ def match_surface_predicate_token(predicate, start_token_index, end_token_index,
     return token_match
 
 
-def parse_token_tfs(node_token):
-    tfs = node_token.tfs
-    start_char, end_char, form = -1, -1, ""
-
-    if "+FROM #1=\\" in tfs:
-        start_i = tfs.index("+FROM #1=\\") + len("+FROM #1=\\") + 1
-        start_char = int(tfs[start_i:tfs.index("\\", start_i)])
-    elif "+FROM \\" in tfs:
-        start_i = tfs.index("+FROM \\") + len("+FROM \\") + 1
-        start_char = int(tfs[start_i:tfs.index("\\", start_i)])
-
-    if "+TO \\" in tfs:
-        end_i = tfs.index("+TO \\") + len("+TO \\") + 1
-        end_char = int(tfs[end_i:tfs.index("\\", end_i)])
-
-    if "+FORM \\" in tfs:
-        form_i = tfs.index("+FORM \\") + len("+FORM \\") + 1 #TODO bug in finding end
-        form = tfs[form_i:tfs.index("\\", start_i)]
-        #print(form)
-
-    return start_char, end_char, form
-
-
 class SemanticNode():
     def __init__(self, node_id, predicate, carg):
         self.node_id = node_id

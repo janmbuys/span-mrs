@@ -60,10 +60,10 @@ def read_profile(args):
             dmrs_json_strs.append(mr.dmrs_json_str(dmrs_rep))
 
     if args.extract_syntax:
-        with open(args.output + ".dt", 'w') as dt_out:
+        with open(args.output + ".tree", 'w') as dt_out:
             for s in derivation_strs:
                 dt_out.write(s + "\n")
-        with open(args.output + ".st", 'w') as st_out:
+        with open(args.output + ".tags", 'w') as st_out:
             for s in supertag_strs:
                 st_out.write(s + "\n")
 
