@@ -126,8 +126,10 @@ def parse_node_token(node_token, token_dict, sentence):
                         current_end_char = tok_current_char + len(sub_token.token_str)
                         sub_token.start_char, sub_token.end_char = tok_current_char, current_end_char
                         sub_token_str = sentence[sub_token.start_char:sub_token.end_char].strip() 
+
+                        sub_token.token_str = sub_token.token_str.replace("–","-").replace("…", "...").replace("’", "'").replace("‘", "`")
                         if sub_token_str != sub_token.token_str:
-                            print(sub_token_str, sub_token.token_str)
+                            print("Token mismatch", sub_token_str, sub_token.token_str)
                             sub_token.token_str = sub_token_str
 
                         new_tokens.append(sub_token)
@@ -292,6 +294,7 @@ class SyntacticRepresentation():
             init_token_str = current_token.token_str
             sentence_str = self.sentence[current_token.start_char:current_token.end_char].strip()
             current_token.token_str = current_token.token_str.replace("–","-").replace("…", "...").replace("’", "'").replace("‘", "`")
+
             if "\"" in sentence_str:
                 current_token.token_str = current_token.token_str.replace("“","\"").replace("”", "\"")
             else:
@@ -305,12 +308,10 @@ class SyntacticRepresentation():
                         end_char = current_token.start_char + len(current_token.token_str)
                         current_token.end_char = end_char
                         current_char = end_char
-                    else:
-                        print("Multispan not matching", sentence_str, current_token.token_str)
+                    #else:
+                    #    print("Multispan not matching", sentence_str, current_token.token_str)
                 else:
                     current_char = current_token.end_char
-                    if len(current_token.token_str) + 1 < len(sentence_str): 
-                        print("Not matching", sentence_str, current_token.token_str) 
                     current_token.token_str = sentence_str 
 
             elif multi_span:
@@ -320,15 +321,13 @@ class SyntacticRepresentation():
                     end_char = current_token.start_char + len(current_token.token_str)
                     current_token.end_char = end_char
                     current_char = end_char
-                else:
-                    print("Multispan not matching", sentence_str, current_token.token_str)
+                #else:
+                #    print("Multispan not matching", sentence_str, current_token.token_str)
 
                 if not current_token.end_char > next_token.start_char:
                     multi_span = False
             else:
                 current_char = current_token.end_char
-                if len(current_token.token_str) != len(sentence_str): 
-                    print("Not matching", sentence_str, current_token.token_str) 
                 current_token.token_str = sentence_str 
 
 
@@ -375,8 +374,12 @@ class SyntacticRepresentation():
             lex_type = self.lexicon.get_lexical_type(tag[-1])
             if lex_type is not None:
                 tag[-1] = lex_type
-            elif not (tag[-1].startswith("generic") or tag[-1].startswith("punct_")):
-                print(tag[-1])
+            elif tag[-1].endswith("_disc_adv"):
+                tag[-1] = "disc_adv"
+            elif tag[-1].startswith("punct_ellipsis_"):
+                tag[-1] = "punct_ellipsis"
+            elif not tag[-1].startswith("generic"):
+                print("Unknown word tag", tag[-1])
 
         assert not (len(tag) > 0 and len(node.child_node_ids) > 0), tag
 
