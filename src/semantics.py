@@ -227,6 +227,7 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
         if node.semantic_nodes:
             semantic_anchor = node_id
             node.semantic_parent_node = semantic_parent
+
             for edge in dmrs_rep.links:
                 start_node_id = self.dmrs_node_map[edge.start]
                 end_node_id = self.dmrs_node_map[edge.end]

@@ -5,10 +5,12 @@ import argparse
 from delphin import tsql as d_tsql
 from delphin import itsdb as d_itsdb
 from delphin import dmrs as d_dmrs
+from delphin import eds as d_eds
 from delphin import derivation as d_derivation
 from delphin import predicate as d_predicate
 from delphin import tokens as d_tokens
-from delphin.codecs import simplemrs as d_simplemrs
+from delphin.codecs import simplemrs as dc_simplemrs
+from delphin.codecs import eds as dc_eds
 from delphin import mrs as d_mrs
 from delphin import predicate as d_predicate
 
@@ -22,7 +24,43 @@ def get_profile_name(dirname):
     return dirname[dirname.rindex('/')+1:]
 
 
-def read_profile(input_dir, output_dir, profile_name, lexicon, args):
+def eds_to_dmrs(eds_rep):
+    node_counter = 10000
+    new_node_ids = {}
+    dmrs_nodes = []
+    for node in eds_rep.nodes:
+        new_node_ids[node.id] = node_counter
+        dmrs_nodes.append(d_dmrs.Node(node_counter, node.predicate, node.type, node.properties, node.carg, node.lnk, node.surface, node.base))
+        node_counter += 1
+
+    dmrs_links = [d_dmrs.Link(new_node_ids[edge[0]], new_node_ids[edge[2]], edge[1], "") for edge in eds_rep.edges]
+    return d_dmrs.DMRS(new_node_ids[eds_rep.top], new_node_ids[eds_rep.top], dmrs_nodes, dmrs_links, eds_rep.lnk, eds_rep.surface, eds_rep.identifier)
+
+
+def read_mrp(mrp_input_path):
+    mrp_eds = {}
+    eds_state = False
+    iid = ""
+    eds_str = ""
+
+    with open(mrp_input_path, 'r') as mrp_file:
+        for line in mrp_file:
+            if eds_state:
+                if line.strip() == "":
+                    mrp_eds[iid] = eds_str
+                    eds_state = False
+                else:
+                    eds_str += line
+            else:
+                if line.startswith('#'):
+                    iid = line[1:].strip()
+                    eds_str = ""
+                    eds_state = True
+
+    return mrp_eds
+
+
+def read_profile(input_dir, output_dir, profile_name, mrp_eds, lexicon, args):
     ts = d_itsdb.TestSuite(input_dir)
  
     derivation_strs = []
@@ -36,13 +74,25 @@ def read_profile(input_dir, output_dir, profile_name, lexicon, args):
         assert len(derivation_rep.daughters) == 1 
         derivation_rep = derivation_rep.daughters[0]
 
-        try:
-            mrs_rep = d_simplemrs.decode(result_mrs)
-        except d_mrs._exceptions.MRSSyntaxError:
-            #print("Skipping: MRS syntax error", result_mrs)
-            continue
+        if mrp_eds:
+            if iid in mrp_eds:
+                try:
+                    eds_rep = dc_eds.decode(mrp_eds[iid])
+                    dmrs_rep = eds_to_dmrs(eds_rep)
+                except d_eds._exceptions.EDSSyntaxError:
+                    #print("Skipping: EDS syntax error", mrp_eds[iid])
+                    continue
+            else:
+                    #print("Unmatched:", iid)
+                    continue
+        else:
+            try:
+                mrs_rep = dc_simplemrs.decode(result_mrs)
+            except d_mrs._exceptions.MRSSyntaxError:
+                #print("Skipping: MRS syntax error", result_mrs)
+                continue
 
-        dmrs_rep = d_dmrs.from_mrs(mrs_rep)
+            dmrs_rep = d_dmrs.from_mrs(mrs_rep)
 
         mr = semantics.SemanticRepresentation(profile_name + ":" + iid, sentence, token_dict, derivation_rep, lexicon) # read derivation tree
 
@@ -104,15 +154,18 @@ def read_redwoods(args):
     for pf, pf_name, sset in profiles:
         in_dir = args.input + "/" + pf
         out_dir = args.output + "/" + sset + "/" + pf
-        read_profile(in_dir, out_dir, pf_name, lexicon, args)
+        read_profile(in_dir, out_dir, pf_name, {}, lexicon, args)
 
 
 def main():
     argparser = argparse.ArgumentParser()
-    argparser.add_argument('-i', '--input', help='directory path to a profile')
+    argparser.add_argument('-i', '--input', help='directory path to a profile, or to the entire Redwoods (with --redwoods)')
     argparser.add_argument('-o', '--output', help='directory path to output')
     argparser.add_argument('-g', '--grammar', help='directory path to the ERG', default="data/original/erg1214")
     argparser.add_argument('--redwoods', action="store_true", help='process the entire Redwoods, not just a single profile')
+    argparser.add_argument('--mrp', action="store_true", help='use the MRP EDS semantic representation')
+    argparser.add_argument('--mrp_input', help='directory path to mrp input')
+
     argparser.add_argument('--extract_syntax', action="store_true", help='extract derivation tree and supertags')
     argparser.add_argument('-c', '--convert_semantics', action="store_true", help='convert span-based DMRS')
     argparser.add_argument('--extract_semantics', action="store_true", help='convert span-based DMRS')
@@ -121,11 +174,18 @@ def main():
     assert args.input and os.path.isdir(args.input), "Invalid input path"
 
     if args.redwoods:
+        #TODO with MRP
         read_redwoods(args)
     else:
         lexicon = syntax.Lexicon(args.grammar)
         profile_name = get_profile_name(args.input)
-        read_profile(args.input, args.output, profile_name, lexicon, args)
+
+        if args.mrp: # Read mrp file matching the profile
+            mrp_eds = read_mrp(args.mrp_input)
+        else:
+            mrp_eds = {}
+
+        read_profile(args.input, args.output, profile_name, mrp_eds, lexicon, args)
 
 
 if __name__ == '__main__':
