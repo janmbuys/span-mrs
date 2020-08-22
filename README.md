@@ -8,6 +8,11 @@
 pip install pydelphin==1.4.0
 ```
 
+ACE Parser (only required for parsing, not for data conversion):
+
+Download and unzip the parser and the precompiled grammar image (ERG 1214) from the [ACE](http://sweaglesw.org/linguistics/ace/) website.
+Place the ace binary in the executable path so that PyDelphin can access it. Place the grammar image in same folder as the grammar (by default, data/original/erg1214).
+
 ## Download the data
 
 This includes the annotated data (in tsdb/gold) and the ERG grammar.
@@ -30,7 +35,7 @@ In the trees, PTB-style normalizations are applied to brackets.
 To extract a single profile, use its directory only (without --redwoods)
 
 ```
-python src/extract-convert-mrs.py -i data/original/erg1214/tsdb/gold/wsj00a -o data/extracted/wsj00a -extract_syntax
+python src/extract-convert-mrs.py -i data/original/erg1214/tsdb/gold/wsj00a -o data/extracted/wsj00a --extract_syntax
 ``` 
 
 **Semantic annotations**: Dependency MRS with token-level span normalizations (.dmrs in JSON format)
@@ -38,4 +43,12 @@ python src/extract-convert-mrs.py -i data/original/erg1214/tsdb/gold/wsj00a -o d
 ```
 python src/extract-convert-mrs.py --redwoods -i data/original/erg1214/tsdb/gold/ -o data/extracted/ --convert_semantics --extract_semantics 2> data/extracted/all.err
 ```
+
+## Parse and convert
+
+Parse input sentence with ACE and convert (to syntactic or semantic representation)
+
+```
+python src/parse-convert-mrs.py --extract_syntax --convert_semantics --extract_semantics
+'''
 

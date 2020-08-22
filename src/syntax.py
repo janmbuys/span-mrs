@@ -37,12 +37,14 @@ def create_span_node_map(nodes):
 
 def create_token_node_list(token_nodes):
     max_token_index = max([token.index for token in token_nodes.values()])
+
     assert len(token_nodes) == max_token_index +1, "Uncovered tokens in derivation"
 
     token_list = [-1 for _ in range(max_token_index+1)]
     for token_id, token_node in token_nodes.items():
         assert token_list[token_node.index] == -1, "Multiple derivation tokens with same index"
         token_list[token_node.index] = token_id
+    #print(token_list)
 
     return token_list
 
@@ -233,8 +235,7 @@ class SyntacticRepresentation():
         self.token_nodes = dict()
         self.lexicon = lexicon
 
-        assert len(derivation_rep.daughters) == 1 
-        self.root_node_id = self.build_derivation_tree(derivation_rep.daughters[0])
+        self.root_node_id = self.build_derivation_tree(derivation_rep)
 
         self.span_node_map = create_span_node_map(self.nodes)
         self.token_node_list = create_token_node_list(self.token_nodes)
@@ -275,7 +276,8 @@ class SyntacticRepresentation():
         return new_node.node_id 
 
 
-    def normalize_token_span_strs(self):
+    def normalize_token_span_strs(self, update_token_spans=False):
+        #TODO for now not modifying token spans for downstream
         multi_span = False
         current_char = -1
 
@@ -306,7 +308,8 @@ class SyntacticRepresentation():
                     span_end_char = current_token.end_char
                     if sentence_str.lower().startswith(current_token.token_str.lower()):
                         end_char = current_token.start_char + len(current_token.token_str)
-                        current_token.end_char = end_char
+                        if update_token_spans:
+                            current_token.end_char = end_char
                         current_char = end_char
                     #else:
                     #    print("Multispan not matching", sentence_str, current_token.token_str)
@@ -317,9 +320,10 @@ class SyntacticRepresentation():
             elif multi_span:
                 sentence_str = self.sentence[current_char:current_token.end_char].strip()
                 if sentence_str.lower().startswith(current_token.token_str.lower()):
-                    current_token.start_char = current_char
-                    end_char = current_token.start_char + len(current_token.token_str)
-                    current_token.end_char = end_char
+                    end_char = current_char + len(current_token.token_str)
+                    if update_token_spans:
+                        current_token.start_char = current_char
+                        current_token.end_char = end_char
                     current_char = end_char
                 #else:
                 #    print("Multispan not matching", sentence_str, current_token.token_str)

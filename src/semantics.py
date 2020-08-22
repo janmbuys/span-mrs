@@ -166,7 +166,7 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
  
 
     def map_dmrs_node(self, node):
-        assert node.lnk.data[0] in self.start_char_token_map and node.lnk.data[1] in self.end_char_token_map, "MRS predicate not matching tokens: " + str(node.original_predicate) + " " + str(node.lnk)
+        assert node.lnk.data[0] in self.start_char_token_map and node.lnk.data[1] in self.end_char_token_map, "MRS predicate not matching tokens: " + str(node.predicate) + " " + str(node.lnk)
         start_node, end_node = self.start_char_token_map[node.lnk.data[0]], self.end_char_token_map[node.lnk.data[1]]
         start_token, end_token = self.token_nodes[start_node].index, self.token_nodes[end_node].index
         span_str = "%d:%d" % (start_token, end_token)

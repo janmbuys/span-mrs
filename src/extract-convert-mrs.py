@@ -33,6 +33,8 @@ def read_profile(input_dir, output_dir, profile_name, lexicon, args):
         tokens_rep = d_tokens.YYTokenLattice.from_string(parse_tokens)
         token_dict = {tok.id : tok for tok in tokens_rep.tokens}
         derivation_rep = d_derivation.from_string(result_derivation)
+        assert len(derivation_rep.daughters) == 1 
+        derivation_rep = derivation_rep.daughters[0]
 
         try:
             mrs_rep = d_simplemrs.decode(result_mrs)
