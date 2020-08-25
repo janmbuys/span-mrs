@@ -44,6 +44,12 @@ python src/extract-convert-mrs.py -i data/original/erg1214/tsdb/gold/wsj00a -o d
 python src/extract-convert-mrs.py --redwoods -i data/original/erg1214/tsdb/gold/ -o data/extracted/ --convert_semantics --extract_semantics 2> data/extracted/all.err
 ```
 
+Get semantics for the profile from MRP EDS's:
+
+```
+python src/extract-convert-mrs.py --mrp -i data/original/erg1214/tsdb/gold/wsj21a/ --mrp_input data/other/mrp-extended/2020/cf/validation/eds/wsj.eds --convert_semantics -o data/extracted/mrp-wsj21a --extract_semantics
+'''
+
 ## Parse and convert
 
 Parse input sentence with ACE and convert (to syntactic or semantic representation)

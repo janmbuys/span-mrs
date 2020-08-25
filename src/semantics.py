@@ -53,6 +53,7 @@ class SemanticNode():
         self.original_predicate = predicate
         self.predicate = predicate
         self.carg = None if carg == "" else carg
+        self.lemma = None
 
         self.internal_parent = -1
         self.internal_child = -1
@@ -110,27 +111,51 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
 
         for i, token_id in enumerate(self.token_node_list):
             token = self.token_nodes[token_id]
-            dmrs_dict["tokens"].append({"index": i, "form": token.token_str, "lemma": token.token_str if token.lemma == "" else token.lemma})
-            if token.carg != "":
-                dmrs_dict["tokens"][-1]["carg"] = token.carg 
+            token_entry = {"id": i, "form": token.token_str, "lemma": token.token_str if token.lemma == "" else token.lemma}
+            token_entry["anchors"] = [{"from": token.start_char, "end": token.end_char}]
+            dmrs_dict["tokens"].append(token_entry)
+            #if token.carg != "":
+            #    dmrs_dict["tokens"][-1]["carg"] = token.carg 
         
         new_node_ids = {}
         for deriv_node_id, deriv_node in self.nodes.items():
             for sem_node in deriv_node.semantic_nodes:
                 new_id = len(new_node_ids)
                 new_node_ids[sem_node.node_id] = new_id
-                dmrs_dict["nodes"].append({"id": new_id, "label": sem_node.original_predicate, "anchors": [{"from": deriv_node.start_token_index, "end": deriv_node.end_token_index}]})
+                node_entry = {"id": new_id, "label": sem_node.predicate, "anchors": [{"from": deriv_node.start_token_index, "end": deriv_node.end_token_index}]} # original_predicate for full predicate
+                if sem_node.is_surface:
+                    #node_entry["is_surface"] = sem_node.is_surface
+                    properties, values = [], []
+                    if sem_node.carg is not None:
+                        properties.append("CARG")
+                        values.append(sem_node.carg)
+                    if sem_node.lemma is not None:
+                        properties.append("lemma")
+                        values.append(sem_node.lemma)
+                    if properties:
+                        node_entry["properties"] = properties
+                    if values:
+                        node_entry["values"] = values
+                    #if not properties and not values:#TODO edge cases
+                    #    print("surface unmatched:", str(sem_node))
+
+                dmrs_dict["nodes"].append(node_entry)
 
         if dmrs_rep.top is None or dmrs_rep.top not in new_node_ids:
             dmrs_dict["tops"] = []
         else:
             dmrs_dict["tops"] = [new_node_ids[dmrs_rep.top]]
 
-        for edge in dmrs_rep.links:
+        for i, edge in enumerate(dmrs_rep.links):
             if not (edge.start in new_node_ids and edge.end in new_node_ids):
                 print(edge.role)
                 continue
-            dmrs_dict["edges"].append({"source": new_node_ids[edge.start], "target": new_node_ids[edge.end], "label": edge.role, "post-label": edge.post})
+            edge_entry = {"id": i,  "source": new_node_ids[edge.start], "target": new_node_ids[edge.end], "label": edge.role}
+            if edge.post:
+                edge_entry["post-label"] = edge.post
+            #if is_dmrs and edge.role == "BV":
+            #        edge_entry["label"] = "RSTR"
+            dmrs_dict["edges"].append(edge_entry)
 
         return json.dumps(dmrs_dict)
 
@@ -311,6 +336,7 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
                 t_str = clean_token_lemma(tok.token_str)
                 for sid, sem_node in enumerate(node.semantic_nodes):
                     if d_predicate.is_surface(sem_node.original_predicate):
+                        sem_node.is_surface = True
                         lemma, pos, sense = d_predicate.split(sem_node.original_predicate)
                         pred = "_" + ("_".join([pos, sense]) if sense is not None else pos)
                         seq = difflib.SequenceMatcher(a=lemma, b=t_str)
@@ -326,6 +352,7 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
                                 sem_node.original_predicate = "_" + tok.lemma + pred
                             tok.is_unknown = True
                     if sem_node.carg is not None:
+                        sem_node.is_surface = True
                         if tok.carg == "":
                             tok.carg = sem_node.carg
                         # For multiple CARGs, just take first one as heuristic
@@ -343,22 +370,27 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
                 #    print(tok.lemma, tok.token_str)
                 if best_sid >=0 and tok.lemma != tok.carg:
                     node.semantic_nodes[best_sid].predicate = best_pred
+                    node.semantic_nodes[best_sid].lemma = tok.lemma
             elif len(node.token_ids) > 1:
                 matched_multi = False
                 for sem_node in node.semantic_nodes:
                     if d_predicate.is_surface(sem_node.original_predicate):
+                        sem_node.is_surface = True
                         lemma, pos, sense = d_predicate.split(sem_node.original_predicate)
                         if "-" in lemma:
                             lemma_split = lemma.split("-")
                             lemma_split[0] += "-"
                         else:
+                            #TODO "awhile"
                             lemma_split = lemma.split("+")
                         if len(lemma_split) == len(node.token_ids):
                             pred = "_" + ("_".join([pos, sense]) if sense is not None else pos)
                             sem_node.predicate = pred
+                            sem_node.lemma = lemma
                             for i, tok_id in enumerate(node.token_ids):
                                 tok = self.token_nodes[tok_id]
                                 tok.lemma = lemma_split[i]
+
                             matched_multi = True
                             break
                     #TODO match the carg if there is one
