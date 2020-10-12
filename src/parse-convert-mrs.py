@@ -50,6 +50,7 @@ def main():
     argparser.add_argument('--extract_syntax', action="store_true", help='extract derivation tree and supertags')
     argparser.add_argument('-c', '--convert_semantics', action="store_true", help='convert span-based DMRS')
     argparser.add_argument('--extract_semantics', action="store_true", help='convert span-based DMRS')
+    argparser.add_argument('-n', '--num_parses', type=int, default=1, help='maximum number of parses to return')
 
     args = argparser.parse_args()
     if args.grammar:
@@ -60,8 +61,10 @@ def main():
         while sentence:
             response = parser.interact(sentence)
             try:
-                result = response.result(0)
-                read_result(sentence, result, lexicon, args)
+                results = response.results()
+                for i in range(args.num_parses):
+                    if i < len(results):
+                        read_result(sentence, results[i], lexicon, args)
             except IndexError:
                 print("No valid parse found.")
             sentence = input()
