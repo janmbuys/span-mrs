@@ -205,18 +205,21 @@ class Lexicon():
 
     def read_lexicon(self, erg_path):
         #TODO extend to do more complex things
-        for event, obj, _ in d_tdl.iterparse(erg_path + "/lexicon.tdl"):
-            if event == 'TypeDefinition':
-                syntactic_name = obj.identifier
-                lexical_type = str(obj.conjunction.terms[0])
-                lemma = " ".join(map(str, obj['ORTH'].values())) 
-                if "SYNSEM" in obj: # else doesn't really matter
-                    semantic_predicate, carg = None, None
-                    if "LKEYS.KEYREL.PRED" in obj["SYNSEM"]:
-                        semantic_predicate = str(obj["SYNSEM"]["LKEYS.KEYREL.PRED"])
-                    if "LKEYS.KEYREL.CARG" in obj["SYNSEM"]:
-                        carg = str(obj["SYNSEM"]["LKEYS.KEYREL.CARG"])
-                    self.lex[syntactic_name] = (lemma, lexical_type, semantic_predicate, carg)
+        try:
+            for event, obj, _ in d_tdl.iterparse(erg_path + "/lexicon.tdl"):
+                if event == 'TypeDefinition':
+                    syntactic_name = obj.identifier
+                    lexical_type = str(obj.conjunction.terms[0])
+                    lemma = " ".join(map(str, obj['ORTH'].values())) 
+                    if "SYNSEM" in obj: # else doesn't really matter
+                        semantic_predicate, carg = None, None
+                        if "LKEYS.KEYREL.PRED" in obj["SYNSEM"]:
+                            semantic_predicate = str(obj["SYNSEM"]["LKEYS.KEYREL.PRED"])
+                        if "LKEYS.KEYREL.CARG" in obj["SYNSEM"]:
+                            carg = str(obj["SYNSEM"]["LKEYS.KEYREL.CARG"])
+                        self.lex[syntactic_name] = (lemma, lexical_type, semantic_predicate, carg)
+        except FileNotFoundError:
+            return
 
     def get_lexical_type(self, name):
         if name in self.lex:

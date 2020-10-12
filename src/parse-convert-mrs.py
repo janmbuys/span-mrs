@@ -52,14 +52,18 @@ def main():
     argparser.add_argument('--extract_semantics', action="store_true", help='convert span-based DMRS')
 
     args = argparser.parse_args()
-    lexicon = syntax.Lexicon(args.grammar)
+    if args.grammar:
+        lexicon = syntax.Lexicon(args.grammar)
 
     with d_ace.ACEParser(args.grammar + '/erg-1214-x86-64-0.9.31.dat') as parser:
         sentence = input()
         while sentence:
             response = parser.interact(sentence)
-            result = response.result(0)
-            read_result(sentence, result, lexicon, args)
+            try:
+                result = response.result(0)
+                read_result(sentence, result, lexicon, args)
+            except IndexError:
+                print("No valid parse found.")
             sentence = input()
 
 
