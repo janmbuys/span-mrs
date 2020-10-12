@@ -68,8 +68,10 @@ def read_profile(input_dir, output_dir, profile_name, mrp_eds, lexicon, args):
     dmrs_json_strs = []
 
     for iid, sentence, parse_tokens, result_derivation, result_mrs in d_tsql.select('i-id i-input p-tokens derivation mrs', ts):
-        tokens_rep = d_tokens.YYTokenLattice.from_string(parse_tokens)
-        token_dict = {tok.id : tok for tok in tokens_rep.tokens}
+        #tokens_rep = d_tokens.YYTokenLattice.from_string(parse_tokens)
+        #token_dict = {tok.id : tok for tok in tokens_rep.tokens}
+        
+        #print(result_derivation) # temp
         derivation_rep = d_derivation.from_string(result_derivation)
         assert len(derivation_rep.daughters) == 1 
         derivation_rep = derivation_rep.daughters[0]
@@ -94,13 +96,13 @@ def read_profile(input_dir, output_dir, profile_name, mrp_eds, lexicon, args):
 
             dmrs_rep = d_dmrs.from_mrs(mrs_rep)
 
-        mr = semantics.SemanticRepresentation(profile_name + ":" + iid, sentence, token_dict, derivation_rep, lexicon) # read derivation tree
+        #mr = semantics.SemanticRepresentation(profile_name + ":" + iid, sentence, derivation_rep, token_dict, lexicon) # read derivation tree
+        mr = semantics.SemanticRepresentation(profile_name + ":" + iid, sentence, derivation_rep, lexicon=lexicon) # read derivation tree
 
-        if args.convert_semantics:
+        if args.convert_semantics or args.extract_semantics:
             mr.map_dmrs(dmrs_rep)
             mr.process_semantic_tree(mr.root_node_id, dmrs_rep)
-
-        mr.print_mrs()
+            mr.print_mrs()
 
         if args.extract_syntax:
             derivation_strs.append(mr.derivation_tree_str(mr.root_node_id, newline=False).lstrip())

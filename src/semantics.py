@@ -27,7 +27,7 @@ def clean_token_lemma(tok_str, pred_is_digit=False):
     return t_str
 
 
-def match_surface_predicate_token(predicate, start_token_index, end_token_index, token_nodes, token_node_list):
+def match_surface_predicate_token(predicate, start_token_index, end_token_index, tokens, token_sequence):
     match_prob = []
     tkns = []
     lemma, pos, sense = d_predicate.split(predicate)
@@ -35,14 +35,14 @@ def match_surface_predicate_token(predicate, start_token_index, end_token_index,
         lemma = lemma[:lemma.rindex('/')]
     for tok_index in range(start_token_index, end_token_index+1):
         # id lookup bypasses the derivation node
-        token = token_nodes[token_node_list[tok_index]] 
+        token = tokens[token_sequence[tok_index]] 
         t_str = clean_token_lemma(token.token_str, predicate.isdigit())
         tkns.append(t_str)
         seq = difflib.SequenceMatcher(a=t_str, b=lemma.lower())
         match_prob.append(seq.ratio())
     token_match = start_token_index + match_prob.index(max(match_prob))
     if max(match_prob) == 0:
-        print(predicate, tkns)
+        print("Predicate not matching any aligned token:", predicate, tkns)
 
     return token_match
 
@@ -69,8 +69,8 @@ class SemanticNode():
 
 
 class SemanticRepresentation(syntax.SyntacticRepresentation):
-    def __init__(self, sid, sentence, token_dict, derivation_rep, lexicon=None):
-        super().__init__(sid, sentence, token_dict, derivation_rep, lexicon)
+    def __init__(self, sid, sentence, derivation_rep, token_dict=None, lexicon=None):
+        super().__init__(sid, sentence, derivation_rep, token_dict, lexicon)
 
         self.dmrs_node_map = dict()
         self.overlapping_node_map = dict()
@@ -88,14 +88,14 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
             join_line = len(node.overlapping_node_ids) == 0 and child_id == node.child_node_ids[0] and len(node.semantic_nodes) == 0
             out_str += self.semantic_tree_str(child_id, level+4, not join_line) + " "
         for token_id in node.token_ids:
-            token_node = self.token_nodes[token_id]
-            if token_node.is_unknown:
+            token = self.tokens[token_id]
+            if token.is_unknown:
                 out_str += "{<unk>} "
-            elif token_node.lemma == "":
+            elif token.lemma == "":
                 out_str += "{<none>} "
             else:
-                out_str += "{%s} " % (token_node.lemma)
-            out_str += token_node.token_str + " "
+                out_str += "{%s} " % (token.lemma)
+            out_str += token.token_str + " "
 
         return out_str + ")"
     
@@ -108,36 +108,44 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
         dmrs_dict["tokens"] = []
         dmrs_dict["nodes"] = []
         dmrs_dict["edges"] = []
+        new_rep = False
 
-        for i, token_id in enumerate(self.token_node_list):
-            token = self.token_nodes[token_id]
-            token_entry = {"id": i, "form": token.token_str, "lemma": token.token_str if token.lemma == "" else token.lemma}
+        for i, token_id in enumerate(self.token_sequence):
+            token = self.tokens[token_id]
+            token_entry = {"form": token.token_str, "lemma": token.token_str if token.lemma == "" else token.lemma}
+            if new_rep:
+                token_entry["id"] = i
+            else:
+                token_entry["index"] = i
             token_entry["anchors"] = [{"from": token.start_char, "end": token.end_char}]
             dmrs_dict["tokens"].append(token_entry)
-            #if token.carg != "":
-            #    dmrs_dict["tokens"][-1]["carg"] = token.carg 
+            if (not new_rep) and token.carg != "":
+                dmrs_dict["tokens"][-1]["carg"] = token.carg 
         
         new_node_ids = {}
         for deriv_node_id, deriv_node in self.nodes.items():
             for sem_node in deriv_node.semantic_nodes:
                 new_id = len(new_node_ids)
                 new_node_ids[sem_node.node_id] = new_id
-                node_entry = {"id": new_id, "label": sem_node.predicate, "anchors": [{"from": deriv_node.start_token_index, "end": deriv_node.end_token_index}]} # original_predicate for full predicate
+                node_entry = {"id": new_id, "anchors": [{"from": deriv_node.start_token_index, "end": deriv_node.end_token_index}]}
+                node_entry["label"] = sem_node.predicate if new_rep else sem_node.original_predicate
                 if sem_node.is_surface:
-                    #node_entry["is_surface"] = sem_node.is_surface
-                    properties, values = [], []
-                    if sem_node.carg is not None:
-                        properties.append("CARG")
-                        values.append(sem_node.carg)
-                    if sem_node.lemma is not None:
-                        properties.append("lemma")
-                        values.append(sem_node.lemma)
-                    if properties:
-                        node_entry["properties"] = properties
-                    if values:
-                        node_entry["values"] = values
-                    #if not properties and not values:#TODO edge cases
-                    #    print("surface unmatched:", str(sem_node))
+                    if new_rep:
+                        properties, values = [], []
+                        if sem_node.carg is not None:
+                            properties.append("CARG")
+                            values.append(sem_node.carg)
+                        if sem_node.lemma is not None:
+                            properties.append("lemma")
+                            values.append(sem_node.lemma)
+                        if properties:
+                            node_entry["properties"] = properties
+                        if values:
+                            node_entry["values"] = values
+                        #if not properties and not values: #TODO edge cases
+                        #    print("surface unmatched:", str(sem_node))
+                    else: #TODO add now
+                        node_entry["is_surface"] = True
 
                 dmrs_dict["nodes"].append(node_entry)
 
@@ -148,7 +156,7 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
 
         for i, edge in enumerate(dmrs_rep.links):
             if not (edge.start in new_node_ids and edge.end in new_node_ids):
-                print(edge.role)
+                print("unmatched edge", edge.role)
                 continue
             edge_entry = {"id": i,  "source": new_node_ids[edge.start], "target": new_node_ids[edge.end], "label": edge.role}
             if edge.post:
@@ -191,9 +199,29 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
  
 
     def map_dmrs_node(self, node):
-        assert node.lnk.data[0] in self.start_char_token_map and node.lnk.data[1] in self.end_char_token_map, "MRS predicate not matching tokens: " + str(node.predicate) + " " + str(node.lnk)
-        start_node, end_node = self.start_char_token_map[node.lnk.data[0]], self.end_char_token_map[node.lnk.data[1]]
-        start_token, end_token = self.token_nodes[start_node].index, self.token_nodes[end_node].index
+        if node.lnk.data[0] in self.start_char_token_map:
+            start_node = self.start_char_token_map[node.lnk.data[0]]
+        else:
+            start_node = None
+            for start_index in range(node.lnk.data[0] + 1, node.lnk.data[0] - 3, -1):
+                if start_index in self.start_char_token_map:
+                    start_node = self.start_char_token_map[start_index]
+                    break
+            if start_node is None:
+                assert node.lnk.data[0] in self.start_char_token_map, "MRS predicate not matching any token start: " + str(node.predicate) + " " + str(node.lnk) + "\n" + self.tokens_str()
+
+        if node.lnk.data[1] in self.end_char_token_map:
+            end_node = self.end_char_token_map[node.lnk.data[1]]
+        else:
+            end_node = None
+            for end_index in range(node.lnk.data[1] - 1, node.lnk.data[1] + 3):
+                if end_index in self.end_char_token_map:
+                    end_node = self.end_char_token_map[end_index]
+                    break
+            if end_node is None:
+                assert node.lnk.data[1] in self.end_char_token_map, "MRS predicate not matching any token end: " + str(node.predicate) + " " + str(node.lnk) + "\n" + self.tokens_str()
+
+        start_token, end_token = self.tokens[start_node].index, self.tokens[end_node].index
         span_str = "%d:%d" % (start_token, end_token)
         matched_node = False
 
@@ -224,6 +252,7 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
 
         for node_id, s_node in self.nodes.items():
             if (not matched) and s_node.start_token_index <= start_token and s_node.end_token_index >= end_token and len(s_node.child_node_ids) == 2:
+                #TODO are we guaranteeing to match the lowest possible node?
                 left_node, right_node = self.nodes[s_node.child_node_ids[0]], self.nodes[s_node.child_node_ids[1]]   
                 if left_node.end_token_index >= start_token and right_node.start_token_index <= end_token:
                     new_node_id = node.id
@@ -239,7 +268,7 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
                     matched = True
                     break
 
-        assert matched, "Not Matched %s %d %d" % (str(node), start_token, end_token) 
+        assert matched, "Not Matched %s %s %s %d %d" % (self.derivation_tree_str(self.root_node_id), str(node), node.surface, start_token, end_token) 
 
     def process_semantic_tree(self, node_id, dmrs_rep, semantic_parent=-1):
         node = self.nodes[node_id]
@@ -281,12 +310,12 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
                 if (not node.isToken) and sem_node.node_id not in internal_edge_from:
                     token_index = -1
                     if d_predicate.is_surface(sem_node.original_predicate):
-                        token_index = match_surface_predicate_token(sem_node.original_predicate, node.start_token_index, node.end_token_index, self.token_nodes, self.token_node_list)
+                        token_index = match_surface_predicate_token(sem_node.original_predicate, node.start_token_index, node.end_token_index, self.tokens, self.token_sequence)
                     elif sem_node.carg is not None:
-                        token_index = match_surface_predicate_token(sem_node.carg, node.start_token_index, node.end_token_index, self.token_nodes, self.token_node_list)
+                        token_index = match_surface_predicate_token(sem_node.carg, node.start_token_index, node.end_token_index, self.tokens, self.token_sequence)
 
                     if token_index >= 0:
-                        token_id = self.token_node_list[token_index]
+                        token_id = self.token_sequence[token_index]
                         new_preterminal = self.token_preterminal_node_map[token_id]
                         self.nodes[new_preterminal].semantic_nodes.append(sem_node)
                         self.dmrs_node_map[sem_node.node_id] = new_preterminal
@@ -329,7 +358,7 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
         # For token (preterminal) nodes, extract lemmas from predicates
         if node.isToken:
             if len(node.token_ids) == 1:
-                tok = self.token_nodes[node.token_ids[0]]
+                tok = self.tokens[node.token_ids[0]]
                 best_lemma_match_prob = 0.0
                 best_sid = -1
                 best_pred = ""
@@ -388,7 +417,7 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
                             sem_node.predicate = pred
                             sem_node.lemma = lemma
                             for i, tok_id in enumerate(node.token_ids):
-                                tok = self.token_nodes[tok_id]
+                                tok = self.tokens[tok_id]
                                 tok.lemma = lemma_split[i]
 
                             matched_multi = True
@@ -396,7 +425,7 @@ class SemanticRepresentation(syntax.SyntacticRepresentation):
                     #TODO match the carg if there is one
 
                 if matched_multi:
-                    tokstr = [self.token_nodes[tok_id].token_str for tok_id in node.token_ids]
+                    tokstr = [self.tokens[tok_id].token_str for tok_id in node.token_ids]
                     semstr = [sem_node.original_predicate for sem_node in node.semantic_nodes]
                     #print("matched", node.token_form, tokstr, semstr)
 

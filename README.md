@@ -60,5 +60,5 @@ Parse an input sentence with ACE and convert (to syntactic or semantic represent
 python src/parse-convert-mrs.py --extract_syntax --convert_semantics --extract_semantics
 ```
 
-This feature is not yet fully supported. 
+This feature may fail for some corner cases. 
 
